@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Management · Technical Section letter monitoring</title>
+<meta name="robots" content="noindex">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230d2942'/%3E%3Cpath d='M20 15h16l9 9v25H20z' fill='none' stroke='%23f0b429' stroke-width='4' stroke-linejoin='round'/%3E%3Cpath d='M27 31h12M27 38h12' stroke='%23f0b429' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/styles.css">
+</head>
+<body data-page="management">
+<a class="skip-link" href="#main">Skip to the section list</a>
+
+<header class="masthead masthead-admin">
+  <div class="wrap masthead-inner">
+    <div class="brand">
+      <div class="crest" aria-hidden="true">
+        <svg viewBox="0 0 48 48" role="presentation">
+          <path d="M11 5h18l8 8v30H11z" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/>
+          <path d="M29 5v8h8" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/>
+          <path d="M18 24h12M18 31h12" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div class="brand-text">
+        <p class="eyebrow" data-shed>Electric Loco Shed, Erode</p>
+        <h1>Management</h1>
+        <p class="tagline">Section register and account access</p>
+      </div>
+    </div>
+    <div class="masthead-side">
+      <div class="clock" aria-label="Current date and time">
+        <span class="clock-date" data-clock-date></span>
+        <span class="clock-time" data-clock-time></span>
+      </div>
+      <span class="masthead-session" data-region="session"></span>
+      <a class="btn btn-ghost-light" href="admin.html">Admin console</a>
+      <a class="btn btn-ghost-light" href="index.html">Status board</a>
+    </div>
+  </div>
+</header>
+
+<main id="main" class="wrap main main-admin">
+  <section class="gate-wrap" data-region="gate" hidden></section>
+
+  <section data-region="management" hidden>
+    <div class="admin-top">
+      <div>
+        <h2 class="section-title">Sections</h2>
+        <p class="section-sub" data-region="section-count"></p>
+      </div>
+      <div class="admin-actions">
+        <a class="btn btn-primary" href="admin.html">Open the register</a>
+      </div>
+    </div>
+
+    <div class="manage-grid">
+      <section class="panel manage-add">
+        <h3 class="panel-title">Add a section</h3>
+        <p class="panel-sub">A new section appears immediately in the register and in the board filters.</p>
+        <form id="add-section-form" autocomplete="off">
+          <label class="field">
+            <span>Section name</span>
+            <input name="name" placeholder="e.g. Tech 50 - Loco Testing" maxlength="60" required>
+          </label>
+          <button class="btn btn-primary" type="submit">Add section</button>
+        </form>
+      </section>
+
+      <section class="panel manage-list">
+        <h3 class="panel-title">Sections sending letters to the Technical Section</h3>
+        <ul class="section-list" data-region="sections"></ul>
+      </section>
+    </div>
+
+    <section class="account-management" data-region="account-management" hidden>
+      <div class="admin-top account-top">
+        <div>
+          <h2 class="section-title">Administrator accounts</h2>
+          <p class="section-sub" data-region="account-count"></p>
+        </div>
+        <button class="btn btn-primary" type="button" data-action="new-account">Create user</button>
+      </div>
+      <div class="panel account-panel">
+        <table class="data-table account-table">
+          <thead><tr><th scope="col">Username</th><th scope="col">Access</th><th scope="col">Account actions</th></tr></thead>
+          <tbody data-region="accounts"></tbody>
+        </table>
+        <div data-region="accounts-empty"></div>
+      </div>
+      <p class="form-note account-note">Only the Main admin can create, rename, reset, or remove administrator accounts.</p>
+    </section>
+
+    <p class="storage-note" data-region="manage-note"></p>
+  </section>
+</main>
+
+<footer class="footer">
+  <div class="wrap footer-inner">
+    <p><strong data-shed>Electric Loco Shed, Erode</strong> · Technical Section letter monitoring</p>
+    <p>Letter and account data are stored in the portal's SQLite database.</p>
+  </div>
+</footer>
+
+<dialog id="modal" class="modal" aria-label="Management actions"></dialog>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<noscript><p class="noscript">The Management page needs JavaScript switched on.</p></noscript>
+
+<script src="assets/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Admin console · Technical Section letter monitoring</title>
+<meta name="robots" content="noindex">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230d2942'/%3E%3Cpath d='M20 15h16l9 9v25H20z' fill='none' stroke='%23f0b429' stroke-width='4' stroke-linejoin='round'/%3E%3Cpath d='M27 31h12M27 38h12' stroke='%23f0b429' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/styles.css">
+</head>
+<body data-page="admin">
+<a class="skip-link" href="#main">Skip to the console</a>
+
+<header class="masthead masthead-admin">
+  <div class="wrap masthead-inner">
+    <div class="brand">
+      <div class="crest" aria-hidden="true">
+        <svg viewBox="0 0 48 48" role="presentation">
+          <path d="M11 5h18l8 8v30H11z" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/>
+          <path d="M29 5v8h8" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/>
+          <path d="M18 24h12M18 31h12" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div class="brand-text">
+        <p class="eyebrow" data-shed>Electric Loco Shed, Erode</p>
+        <h1>Admin console</h1>
+        <p class="tagline">Record letters, move them through the section and dispatch them</p>
+      </div>
+    </div>
+    <div class="masthead-side">
+      <div class="clock" aria-label="Current date and time">
+        <span class="clock-date" data-clock-date></span>
+        <span class="clock-time" data-clock-time></span>
+      </div>
+      <span class="masthead-session" data-region="session"></span>
+      <a class="btn btn-ghost-light" href="management.html">Management</a>
+      <a class="btn btn-ghost-light" href="index.html">View status board</a>
+    </div>
+  </div>
+</header>
+
+<main id="main" class="wrap main main-admin">
+  <section class="gate-wrap" data-region="gate" hidden></section>
+
+  <section data-region="admin" hidden>
+    <div class="admin-top">
+      <div>
+        <h2 class="section-title">Letter register</h2>
+        <p class="section-sub" data-region="admin-count"></p>
+      </div>
+      <div class="admin-actions">
+        <button class="btn" type="button" data-action="settings" data-admin-only hidden>Settings &amp; backup</button>
+        <button class="btn btn-primary" type="button" data-action="new-letter">
+          <svg viewBox="0 0 24 24" aria-hidden="true" class="ico"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          New letter
+        </button>
+      </div>
+    </div>
+
+    <section class="panel toolbar" aria-label="Filter the register">
+      <label class="field field-search">
+        <span>Search</span>
+        <input type="search" id="a-q" placeholder="Subject, reference, section…" autocomplete="off">
+      </label>
+      <label class="field">
+        <span>Stage</span>
+        <select id="a-status">
+          <option value="">All stages</option>
+          <option value="received">Received</option>
+          <option value="drafting">Draft preparation</option>
+          <option value="with_officer">With officer</option>
+          <option value="signed">Signed — to dispatch</option>
+          <option value="dispatched">Dispatched</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>From section</span>
+        <select id="a-section"><option value="">All sections</option></select>
+      </label>
+      <label class="field">
+        <span>With officer</span>
+        <select id="a-officer"><option value="">All officers</option></select>
+      </label>
+      <label class="check">
+        <input type="checkbox" id="a-archived">
+        <span>Show archive (over 48 hrs)</span>
+      </label>
+    </section>
+
+    <div class="panel table-panel">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th scope="col">Letter</th>
+            <th scope="col">From</th>
+            <th scope="col">Current position</th>
+            <th scope="col">Received</th>
+            <th scope="col"><span class="sr-only">Actions</span></th>
+          </tr>
+        </thead>
+        <tbody data-region="rows"></tbody>
+      </table>
+      <div data-region="table-empty"></div>
+    </div>
+
+    <p class="storage-note" data-region="storage-note"></p>
+  </section>
+</main>
+
+<footer class="footer">
+  <div class="wrap footer-inner">
+    <p><strong data-shed>Electric Loco Shed, Erode</strong> · Technical Section letter monitoring</p>
+    <p>Records are stored in the portal's SQLite database. Use Settings → Backup for a copy.</p>
+  </div>
+</footer>
+
+<dialog id="modal" class="modal" aria-label="Admin actions"></dialog>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<noscript><p class="noscript">The admin console needs JavaScript switched on.</p></noscript>
+
+<script src="assets/app.js"></script>
+</body>
+</html>
