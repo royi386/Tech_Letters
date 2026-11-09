@@ -30,6 +30,24 @@ a sign-in form; account creation is only available to the Main admin.
 For other computers, set `HOST=0.0.0.0` and `COOKIE_SECURE=1`, then place the server behind a
 trusted HTTPS reverse proxy. Do not send passwords over plain HTTP on a shared network.
 
+## Docker Compose (version 0.1)
+
+Requires Docker Engine with the Compose plugin. From this directory, build and start the portal:
+
+```bash
+docker compose up -d --build
+```
+
+The portal listens on `127.0.0.1:5173` by default, suitable for a host-based HTTPS reverse proxy.
+Set `PORT_BIND_ADDRESS=0.0.0.0` only when intentionally exposing the port on the host network.
+Keep `COOKIE_SECURE=1` behind HTTPS; for local HTTP-only testing, run
+`COOKIE_SECURE=0 docker compose up -d --build`.
+
+SQLite data and the generated encryption key persist in the `portal_data` Docker volume. Back up
+that volume regularly and keep the key together with the database. To stop the service without
+deleting data, run `docker compose down`; do not use `docker compose down -v` unless you intend to
+delete the database and key.
+
 ## Signing in
 
 Usernames are indexed by a keyed HMAC and stored encrypted for display; they are not stored as
@@ -103,6 +121,9 @@ management.html     section list maintenance
 assets/styles.css   styles and print layout
 assets/app.js       store, workflow, views, sign-in, captcha, backup
 serve.js            SQLite API and static server
+Dockerfile          Node 24 container image
+docker-compose.yml  portal service and persistent database volume
+.dockerignore       excludes local data and repository files from image builds
 data/portal.sqlite  database (generated on first run)
 data/app.key        encryption/HMAC key (generated on first run; keep private)
 ```

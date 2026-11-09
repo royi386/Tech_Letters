@@ -1,0 +1,6 @@
+.git
+.freebuff
+data
+node_modules
+.serve.log
+*.log
