@@ -196,6 +196,13 @@ function requireSectionUser(req, res) {
   return user;
 }
 
+function ownsSectionSubmission(letter, user) {
+  if (!letter || letter.fromSection !== user.sectionName) return false;
+  if (letter.submittedByUserId) return letter.submittedByUserId === user.id;
+  return Array.isArray(letter.history) && letter.history.some((entry) =>
+    entry.action === 'Submitted by section user' && entry.by === user.username);
+}
+
 function activeSection(name) {
   const row = db.prepare('SELECT settings_json FROM portal_state WHERE id = 1').get();
   const settings = JSON.parse(row.settings_json);
@@ -392,7 +399,7 @@ async function handleApi(req, res, url) {
     if (fromRef.length > 120 || remarks.length > 1000) return sendJson(res, 400, { error: 'The reference or remarks are too long.' });
     if (!Number.isFinite(receivedTime)) return sendJson(res, 400, { error: 'Enter a valid received date.' });
     let attachment;
-    try { attachment = parseAttachment(body.attachment); }
+    try { attachment = body.attachment ? parseAttachment(body.attachment) : null; }
     catch (err) { return sendJson(res, err.status || 400, { error: err.message }); }
 
     db.exec('BEGIN IMMEDIATE');
@@ -408,6 +415,7 @@ async function handleApi(req, res, url) {
       const letter = {
         id: crypto.randomUUID(),
         refNo: nextSectionReference(user.sectionName, settings, letters),
+        submittedByUserId: user.id,
         subject,
         fromSection: user.sectionName,
         fromRef,
@@ -425,16 +433,90 @@ async function handleApi(req, res, url) {
         history: [{ at: now, action: 'Submitted by section user', status: 'received', by: user.username }],
         createdAt: now,
         updatedAt: now,
-        attachment: { name: attachment.filename, type: attachment.contentType }
+        attachment: attachment ? { name: attachment.filename, type: attachment.contentType } : null
       };
       letters.push(letter);
       const revision = row.revision + 1;
-      db.prepare('INSERT INTO letter_attachments (letter_id, filename, content_type, data, created_at) VALUES (?, ?, ?, ?, ?)')
-        .run(letter.id, attachment.filename, attachment.contentType, attachment.data, now);
+      if (attachment) {
+        db.prepare('INSERT INTO letter_attachments (letter_id, filename, content_type, data, created_at) VALUES (?, ?, ?, ?, ?)')
+          .run(letter.id, attachment.filename, attachment.contentType, attachment.data, now);
+      }
       db.prepare('UPDATE portal_state SET letters_json = ?, initialized = 1, revision = ? WHERE id = 1')
         .run(JSON.stringify(letters), revision);
       db.exec('COMMIT');
       return sendJson(res, 201, { ok: true, letter, revision });
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  const submissionMatch = url.pathname.match(/^\/api\/submissions\/([a-f0-9-]+)$/i);
+  if (submissionMatch && (req.method === 'PATCH' || req.method === 'DELETE')) {
+    const user = requireSectionUser(req, res);
+    if (!user) return;
+    let body = {};
+    let attachment = null;
+    let values = null;
+    if (req.method === 'PATCH') {
+      body = await readBody(req, 12 * 1024 * 1024);
+      const subject = String(body.subject || '').trim();
+      const fromRef = String(body.fromRef || '').trim();
+      const remarks = String(body.remarks || '').trim();
+      const receivedOn = String(body.receivedOn || '');
+      const receivedTime = Date.parse(receivedOn);
+      if (!subject || subject.length > 240) return sendJson(res, 400, { error: 'Enter a subject under 240 characters.' });
+      if (fromRef.length > 120 || remarks.length > 1000) return sendJson(res, 400, { error: 'The reference or remarks are too long.' });
+      if (!Number.isFinite(receivedTime)) return sendJson(res, 400, { error: 'Enter a valid received date.' });
+      try { attachment = body.attachment ? parseAttachment(body.attachment) : null; }
+      catch (err) { return sendJson(res, err.status || 400, { error: err.message }); }
+      values = { subject, fromRef, remarks, receivedOn: new Date(receivedTime).toISOString() };
+    }
+
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const row = db.prepare('SELECT letters_json, revision FROM portal_state WHERE id = 1').get();
+      const letters = JSON.parse(row.letters_json);
+      const index = letters.findIndex((letter) => letter.id === submissionMatch[1]);
+      const letter = letters[index];
+      if (!ownsSectionSubmission(letter, user)) {
+        db.exec('ROLLBACK');
+        return sendJson(res, 404, { error: 'Your submitted letter was not found.' });
+      }
+      if (letter.status !== 'received') {
+        db.exec('ROLLBACK');
+        return sendJson(res, 409, { error: 'This letter is now being handled by the Technical Section. Only an administrator can edit or delete it.' });
+      }
+      const revision = row.revision + 1;
+      if (req.method === 'DELETE') {
+        letters.splice(index, 1);
+        db.prepare('DELETE FROM letter_attachments WHERE letter_id = ?').run(letter.id);
+        db.prepare('UPDATE portal_state SET letters_json = ?, revision = ? WHERE id = 1')
+          .run(JSON.stringify(letters), revision);
+        db.exec('COMMIT');
+        return sendJson(res, 200, { ok: true, revision });
+      }
+
+      const now = new Date().toISOString();
+      letter.subject = values.subject;
+      letter.fromRef = values.fromRef;
+      letter.remarks = values.remarks;
+      letter.receivedOn = values.receivedOn;
+      letter.updatedAt = now;
+      letter.history = Array.isArray(letter.history) ? letter.history : [];
+      letter.history.push({ at: now, action: 'Section submission updated', status: 'received', by: user.username });
+      if (attachment) {
+        letter.attachment = { name: attachment.filename, type: attachment.contentType };
+        db.prepare(`INSERT INTO letter_attachments (letter_id, filename, content_type, data, created_at)
+          VALUES (?, ?, ?, ?, ?) ON CONFLICT(letter_id) DO UPDATE SET
+          filename = excluded.filename, content_type = excluded.content_type,
+          data = excluded.data, created_at = excluded.created_at`)
+          .run(letter.id, attachment.filename, attachment.contentType, attachment.data, now);
+      }
+      db.prepare('UPDATE portal_state SET letters_json = ?, revision = ? WHERE id = 1')
+        .run(JSON.stringify(letters), revision);
+      db.exec('COMMIT');
+      return sendJson(res, 200, { ok: true, letter, revision });
     } catch (err) {
       db.exec('ROLLBACK');
       throw err;

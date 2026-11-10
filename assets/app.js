@@ -307,6 +307,7 @@
 
     return {
       id: String(raw.id),
+      submittedByUserId: String(raw.submittedByUserId || ''),
       refNo: String(raw.refNo || '').trim() || 'Unnumbered',
       subject: String(raw.subject || '').trim() || '(No subject recorded)',
       fromSection: String(raw.fromSection || '').trim() || 'Unspecified',
@@ -1518,13 +1519,26 @@
     });
     if (count) count.textContent = letters.length + ' letter' + (letters.length === 1 ? '' : 's') + ' submitted';
     rows.innerHTML = letters.map(function (letter) {
+      var actions = canEditSectionSubmission(letter)
+        ? '<button class="btn btn-tiny" type="button" data-action="edit-submission" data-id="' + esc(letter.id) + '">Edit</button> ' +
+          '<button class="btn btn-tiny btn-danger" type="button" data-action="delete-submission" data-id="' + esc(letter.id) + '">Delete</button>'
+        : (letter.status === 'received' ? '—' : 'Technical Section handling');
       return '<tr><td class="cell-letter"><strong>' + esc(letter.refNo) + '</strong></td>' +
         '<td>' + esc(letter.subject) + '</td>' +
         '<td>' + fmtDate(letter.receivedOn) + '</td>' +
         '<td><span class="pill s-' + esc(letter.status) + '">' + esc(STATUS[letter.status].label) + '</span></td>' +
-        '<td>' + (letter.attachment ? '<a class="linkish" href="/api/letters/' + encodeURIComponent(letter.id) + '/attachment">' + esc(letter.attachment.name) + '</a>' : '—') + '</td></tr>';
+        '<td>' + (letter.attachment ? '<a class="linkish" href="/api/letters/' + encodeURIComponent(letter.id) + '/attachment">' + esc(letter.attachment.name) + '</a>' : '—') + '</td>' +
+        '<td class="account-actions">' + actions + '</td></tr>';
     }).join('');
     if (empty) empty.hidden = letters.length > 0;
+  }
+
+  function canEditSectionSubmission(letter) {
+    if (!isAuthorized('section') || !letter || letter.status !== 'received' || letter.fromSection !== currentUser.sectionName) return false;
+    if (letter.submittedByUserId) return letter.submittedByUserId === currentUser.id;
+    return letter.history.some(function (entry) {
+      return entry.action === 'Submitted by section user' && entry.by === currentUser.username;
+    });
   }
 
   function wireSectionPage() {
@@ -1536,16 +1550,13 @@
     });
   }
 
-  function submitSectionLetter(form) {
+  function submitSectionLetter(form, editingId) {
     if (!isAuthorized('section')) return Promise.resolve();
+    if (editingId && !canEditSectionSubmission(byId(editingId))) return Promise.resolve();
     var fd = new FormData(form);
     var file = fd.get('attachment');
     var receivedMs = fromDateInput(String(fd.get('receivedOn') || ''));
-    if (!file || !file.name) {
-      formError(form, 'Choose the source letter to upload.');
-      return Promise.resolve();
-    }
-    if (file.size > 8 * 1024 * 1024) {
+    if (file && file.name && file.size > 8 * 1024 * 1024) {
       formError(form, 'The source letter must be no larger than 8 MB.');
       return Promise.resolve();
     }
@@ -1555,35 +1566,82 @@
     }
     var submit = form.querySelector('button[type="submit"]');
     if (submit) submit.disabled = true;
-    var reader = new FileReader();
-    reader.onload = function () {
-      apiRequest('/api/submissions', {
-        method: 'POST',
-        body: {
-          subject: String(fd.get('subject') || '').trim(),
-          fromRef: String(fd.get('fromRef') || '').trim(),
-          receivedOn: new Date(receivedMs).toISOString(),
-          remarks: String(fd.get('remarks') || '').trim(),
-          attachment: { name: file.name, type: file.type, data: reader.result }
-        }
+    var payload = {
+      subject: String(fd.get('subject') || '').trim(),
+      fromRef: String(fd.get('fromRef') || '').trim(),
+      receivedOn: new Date(receivedMs).toISOString(),
+      remarks: String(fd.get('remarks') || '').trim()
+    };
+    function sendSubmission() {
+      apiRequest(editingId ? '/api/submissions/' + encodeURIComponent(editingId) : '/api/submissions', {
+        method: editingId ? 'PATCH' : 'POST',
+        body: payload
       }).then(function (result) {
-        form.reset();
+        if (editingId) closeModal();
+        else form.reset();
         form.querySelector('[data-form-error]').hidden = true;
         return apiRequest('/api/state').then(function (serverState) {
           applyServerState(serverState);
-          toast('Letter ' + result.letter.refNo + ' submitted to the Technical Section');
+          toast(editingId ? 'Letter ' + result.letter.refNo + ' updated' :
+            'Letter ' + result.letter.refNo + ' submitted to the Technical Section');
         });
       }).catch(function (err) {
         formError(form, err.message || 'The letter could not be submitted.');
+        if (editingId) loadServerState();
       }).then(function () {
         if (submit) submit.disabled = false;
       });
+    }
+    if (!file || !file.name) {
+      sendSubmission();
+      return;
+    }
+    var reader = new FileReader();
+    reader.onload = function () {
+      payload.attachment = { name: file.name, type: file.type, data: reader.result };
+      sendSubmission();
     };
     reader.onerror = function () {
       formError(form, 'The source letter could not be read.');
       if (submit) submit.disabled = false;
     };
     reader.readAsDataURL(file);
+  }
+
+  function openSectionSubmissionEdit(id) {
+    var letter = byId(id);
+    if (!canEditSectionSubmission(letter)) return;
+    openModal('<form class="modal-form">' +
+      '<div class="modal-head"><div><p class="modal-eyebrow">' + esc(letter.refNo) + '</p><h2>Edit submitted letter</h2></div>' +
+      '<button class="icon-btn" type="button" data-action="close-modal" aria-label="Close">' + iconClose() + '</button></div>' +
+      '<div class="modal-body"><div class="form-grid">' +
+      '<label class="field span-2"><span>Subject</span><input name="subject" value="' + esc(letter.subject) + '" maxlength="240" required></label>' +
+      '<label class="field"><span>Your letter number / date</span><input name="fromRef" value="' + esc(letter.fromRef) + '" maxlength="120"></label>' +
+      '<label class="field"><span>Date received</span><input type="date" name="receivedOn" value="' + esc(dateInputValue(letter.receivedOn)) + '" required></label>' +
+      '<label class="field span-2"><span>Replace source letter (optional; PDF, JPG, PNG, or DOCX up to 8 MB)</span>' +
+      '<input type="file" name="attachment" accept=".pdf,.jpg,.jpeg,.png,.docx,application/pdf,image/jpeg,image/png,application/vnd.openxmlformats-officedocument.wordprocessingml.document"></label>' +
+      '<label class="field span-2"><span>Remarks (optional)</span><textarea name="remarks" rows="2" maxlength="1000">' + esc(letter.remarks) + '</textarea></label>' +
+      '</div>' + (letter.attachment ? '<p class="form-note">Current source: <a class="linkish" href="/api/letters/' + encodeURIComponent(letter.id) + '/attachment">' + esc(letter.attachment.name) + '</a></p>' : '') +
+      '<p class="form-error" data-form-error hidden></p></div>' +
+      '<div class="modal-foot"><button class="btn" type="button" data-action="close-modal">Cancel</button>' +
+      '<button class="btn btn-primary" type="submit">Save changes</button></div></form>',
+      function (fd, form) { submitSectionLetter(form, id); });
+  }
+
+  function deleteSectionSubmission(id) {
+    var letter = byId(id);
+    if (!canEditSectionSubmission(letter)) return;
+    confirmDialog('Delete submitted letter', 'Delete ' + letter.refNo + ' — “' + letter.subject + '”? This cannot be undone.', 'Delete letter', function () {
+      apiRequest('/api/submissions/' + encodeURIComponent(id), { method: 'DELETE' }).then(function () {
+        return apiRequest('/api/state');
+      }).then(function (serverState) {
+        applyServerState(serverState);
+        toast('Letter ' + letter.refNo + ' deleted');
+      }).catch(function (err) {
+        loadServerState();
+        toast(err.message || 'The letter could not be deleted.');
+      });
+    });
   }
 
   function renderSections() {
@@ -2277,6 +2335,12 @@
         break;
       case 'edit-letter':
         openLetterForm(id);
+        break;
+      case 'edit-submission':
+        openSectionSubmissionEdit(id);
+        break;
+      case 'delete-submission':
+        deleteSectionSubmission(id);
         break;
       case 'admin-letter':
         openAdminLetter(id);
