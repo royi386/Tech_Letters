@@ -2,10 +2,8 @@ name: tech-letters
 
 services:
   portal:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: tech-letters:0.1
+    image: ghcr.io/royi386/tech-letters:0.1
+    pull_policy: always
     restart: unless-stopped
     environment:
       HOST: 0.0.0.0
