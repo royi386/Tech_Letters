@@ -7,7 +7,7 @@ ENV NODE_ENV=production \
 
 WORKDIR /app
 
-COPY --chown=node:node serve.js index.html admin.html management.html ./
+COPY --chown=node:node serve.js index.html admin.html management.html section.html ./
 COPY --chown=node:node assets ./assets
 RUN mkdir -p /app/data && chown node:node /app/data
 

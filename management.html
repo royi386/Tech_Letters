@@ -35,6 +35,7 @@
       </div>
       <span class="masthead-session" data-region="session"></span>
       <a class="btn btn-ghost-light" href="admin.html">Admin console</a>
+      <a class="btn btn-ghost-light" href="section.html">Section portal</a>
       <a class="btn btn-ghost-light" href="index.html">Status board</a>
     </div>
   </div>
@@ -76,10 +77,13 @@
     <section class="account-management" data-region="account-management" hidden>
       <div class="admin-top account-top">
         <div>
-          <h2 class="section-title">Administrator accounts</h2>
+          <h2 class="section-title">Accounts</h2>
           <p class="section-sub" data-region="account-count"></p>
         </div>
-        <button class="btn btn-primary" type="button" data-action="new-account">Create user</button>
+        <div class="admin-actions">
+          <button class="btn" type="button" data-action="new-admin-account">Create administrator</button>
+          <button class="btn btn-primary" type="button" data-action="new-section-account">Create section user</button>
+        </div>
       </div>
       <div class="panel account-panel">
         <table class="data-table account-table">
@@ -88,7 +92,7 @@
         </table>
         <div data-region="accounts-empty"></div>
       </div>
-      <p class="form-note account-note">Only the Main admin can create, rename, reset, or remove administrator accounts.</p>
+      <p class="form-note account-note">Only the Main admin can create, assign, reset, or remove accounts.</p>
     </section>
 
     <p class="storage-note" data-region="manage-note"></p>

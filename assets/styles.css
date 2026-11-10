@@ -570,15 +570,16 @@ dialog.modal[open]{display:flex;flex-direction:column;animation:pop .16s ease-ou
   gap:0 18px;padding:10px 18px 14px;max-height:min(58vh,640px);overflow:auto;
 }
 .section-row{
-  display:flex;align-items:center;gap:10px;padding:8px 0;
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 0;
   border-bottom:1px solid #eef2f7;min-width:0;
 }
 .section-name{
-  font-size:13px;font-weight:600;color:var(--ink);flex:1;min-width:0;
+  font-size:13px;font-weight:600;color:var(--ink);flex:1 1 100%;min-width:0;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
 }
 .section-row .tag{flex:none}
 .section-row .btn{flex:none}
+.tag-warning{color:#8a4b08;background:#fff3d6;border-color:#f4d28a}
 .confirm-text{font-size:14px;color:var(--ink-2);line-height:1.55}
 .account-management{margin-top:22px}
 .account-top{padding-top:0}
@@ -586,6 +587,8 @@ dialog.modal[open]{display:flex;flex-direction:column;animation:pop .16s ease-ou
 .account-table{width:100%}
 .account-actions{white-space:nowrap}
 .account-note{margin-top:10px}
+.section-submit-panel{padding:18px}
+.section-submit-form{display:flex;flex-direction:column;gap:14px}
 
 /* ---------------- Admin ---------------- */
 

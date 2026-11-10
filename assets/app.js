@@ -68,7 +68,7 @@
     refPrefix: 'ELX/ED/TS',
     sections: TECH_SECTIONS.slice(),
     officers: ['ADEE-1', 'ADEE-2', 'DEE', 'Sr.DEE'],
-    modes: ['E-Office', 'Email', 'Telegram', 'Post'],
+    modes: ['E-Office', 'Email', 'Telegram', 'Post', 'Handed Over'],
     slaDays: 3
   };
 
@@ -106,6 +106,7 @@
   var currentUser = null;
   var managedAccounts = [];
   var serverInitialized = false;
+  var stateRevision = 0;
   var legacyState = null;
   var stateRequestPending = false;
   var modalEl = null;
@@ -245,6 +246,7 @@
   function applyServerState(data) {
     state = normalize({ settings: data.settings, letters: data.letters, auth: {} });
     serverInitialized = !!data.initialized;
+    stateRevision = Number(data.revision) || 0;
     storageOk = true;
     syncShell();
     refreshCurrentPage();
@@ -280,6 +282,7 @@
     settings.sections = resolveSections(source.sections);
     settings.officers = cleanList(settings.officers, DEFAULT_SETTINGS.officers);
     settings.modes = cleanList(settings.modes, DEFAULT_SETTINGS.modes);
+    if (settings.modes.indexOf('Handed Over') < 0) settings.modes.push('Handed Over');
     settings.slaDays = Math.min(30, Math.max(1, Number(settings.slaDays) || DEFAULT_SETTINGS.slaDays));
 
     var letters = (Array.isArray(data.letters) ? data.letters : [])
@@ -319,6 +322,10 @@
       dispatchMode: raw.dispatchMode ? String(raw.dispatchMode) : '',
       dispatchRef: String(raw.dispatchRef || ''),
       dispatchedAt: isoOrNull(raw.dispatchedAt),
+      attachment: raw.attachment && typeof raw.attachment === 'object' ? {
+        name: String(raw.attachment.name || ''),
+        type: String(raw.attachment.type || '')
+      } : null,
       history: letters,
       createdAt: isoOrNull(raw.createdAt) || nowISO(),
       updatedAt: isoOrNull(raw.updatedAt) || nowISO()
@@ -332,8 +339,9 @@
     }
     return apiRequest('/api/state', {
       method: 'PUT',
-      body: { settings: state.settings, letters: state.letters }
-    }).then(function () {
+      body: { settings: state.settings, letters: state.letters, revision: stateRevision }
+    }).then(function (result) {
+      stateRevision = result.revision;
       serverInitialized = true;
       storageOk = true;
       return true;
@@ -775,7 +783,15 @@
     ];
     return '<dl class="detail-grid">' + rows.map(function (row) {
       return '<dt>' + esc(row[0]) + '</dt><dd>' + esc(row[1]) + '</dd>';
-    }).join('') + '</dl>';
+    }).join('') + '</dl>' + attachmentLinkHtml(letter);
+  }
+
+  function attachmentLinkHtml(letter) {
+    if (!letter.attachment || !letter.attachment.name) return '';
+    var ownsSection = currentUser && currentUser.role === 'section_user' && currentUser.sectionName === letter.fromSection;
+    if (!isAdministrator() && !ownsSection) return '';
+    return '<section class="topic"><h3>Source letter</h3><a class="linkish" href="/api/letters/' +
+      encodeURIComponent(letter.id) + '/attachment">Download ' + esc(letter.attachment.name) + '</a></section>';
   }
 
   function statusBanner(letter) {
@@ -1025,6 +1041,7 @@
   function refreshCurrentPage() {
     if (page === 'admin') refreshAdmin();
     else if (page === 'management') refreshManagement();
+    else if (page === 'section') refreshSectionPage();
     else refreshView();
   }
 
@@ -1248,10 +1265,10 @@
      Sign in — admin console and management page
      --------------------------------------------------------- */
 
-  var ROLE_LABEL = { admin: 'Admin console', management: 'Management' };
+  var ROLE_LABEL = { admin: 'Admin console', management: 'Management', section: 'Section portal' };
 
   function hasSession(role) {
-    return !!currentUser;
+    return !!currentUser && (!role || currentUser.role === role);
   }
 
   function openAccountSession(account) {
@@ -1264,8 +1281,8 @@
 
   /* An admin may also open the Management page; management credentials cannot open the register. */
   function isAuthorized(role) {
-    if (role === 'admin') return hasSession('admin') || hasSession('user');
-    return hasSession('management') || hasSession('admin');
+    if (role === 'section') return hasSession('section_user');
+    return hasSession('admin');
   }
 
   function isAdministrator() {
@@ -1283,7 +1300,7 @@
   function renderSessionChip() {
     var holder = $('[data-region="session"]');
     if (!holder) return;
-    var role = page === 'management' ? 'management' : 'admin';
+    var role = page === 'section' ? 'section' : (page === 'management' || page === 'admin' ? 'admin' : '');
     if (page === 'view' || !isAuthorized(role)) {
       holder.innerHTML = '';
       return;
@@ -1375,6 +1392,14 @@
         method: 'POST',
         body: { username: username, password: password, captcha: captcha, captchaId: String(fd.get('captchaId') || '') }
       }).then(function (result) {
+        var expectedRole = page === 'section' ? 'section_user' : 'admin';
+        if (result.user.role !== expectedRole) {
+          return apiRequest('/api/logout', { method: 'POST' }).then(function () {
+            throw new Error(expectedRole === 'admin'
+              ? 'This page is for administrator accounts. Section users should sign in on the Section portal.'
+              : 'This page is for section user accounts. Administrators should sign in on Management.');
+          });
+        }
         openAccountSession(result.user);
         return apiRequest('/api/me').then(function (session) {
           if (!session.user) {
@@ -1387,6 +1412,7 @@
           closeSessions();
           throw err;
         }).then(function (serverState) {
+          stateRevision = Number(serverState.revision) || 0;
           var oldLetters = legacyState && Array.isArray(legacyState.letters) ? legacyState.letters : [];
           if (legacyState && (!serverState.initialized || (!serverState.letters.length && oldLetters.length))) {
             state = normalize(legacyState);
@@ -1461,6 +1487,105 @@
     renderSessionChip();
   }
 
+  function refreshSectionPage() {
+    var gate = $('[data-region="gate"]');
+    var portal = $('[data-region="section-portal"]');
+    if (!gate || !portal) return;
+    if (isAuthorized('section')) {
+      gate.hidden = true;
+      gate.innerHTML = '';
+      portal.hidden = false;
+      var sectionName = $('[data-region="section-name"]');
+      if (sectionName) sectionName.textContent = currentUser.sectionName;
+      renderSectionSubmissions();
+    } else {
+      portal.hidden = true;
+      gate.hidden = false;
+      gate.innerHTML = gateHtml('section');
+      wireGate('section');
+    }
+    renderSessionChip();
+  }
+
+  function renderSectionSubmissions() {
+    if (!isAuthorized('section')) return;
+    var rows = $('[data-region="section-submissions"]');
+    var count = $('[data-region="section-submission-count"]');
+    var empty = $('[data-region="section-submissions-empty"]');
+    if (!rows) return;
+    var letters = state.letters.slice().sort(function (a, b) {
+      return (parseISO(b.createdAt) || 0) - (parseISO(a.createdAt) || 0);
+    });
+    if (count) count.textContent = letters.length + ' letter' + (letters.length === 1 ? '' : 's') + ' submitted';
+    rows.innerHTML = letters.map(function (letter) {
+      return '<tr><td class="cell-letter"><strong>' + esc(letter.refNo) + '</strong></td>' +
+        '<td>' + esc(letter.subject) + '</td>' +
+        '<td>' + fmtDate(letter.receivedOn) + '</td>' +
+        '<td><span class="pill s-' + esc(letter.status) + '">' + esc(STATUS[letter.status].label) + '</span></td>' +
+        '<td>' + (letter.attachment ? '<a class="linkish" href="/api/letters/' + encodeURIComponent(letter.id) + '/attachment">' + esc(letter.attachment.name) + '</a>' : '—') + '</td></tr>';
+    }).join('');
+    if (empty) empty.hidden = letters.length > 0;
+  }
+
+  function wireSectionPage() {
+    var form = $('#section-submit-form');
+    if (!form) return;
+    form.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      submitSectionLetter(form);
+    });
+  }
+
+  function submitSectionLetter(form) {
+    if (!isAuthorized('section')) return Promise.resolve();
+    var fd = new FormData(form);
+    var file = fd.get('attachment');
+    var receivedMs = fromDateInput(String(fd.get('receivedOn') || ''));
+    if (!file || !file.name) {
+      formError(form, 'Choose the source letter to upload.');
+      return Promise.resolve();
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      formError(form, 'The source letter must be no larger than 8 MB.');
+      return Promise.resolve();
+    }
+    if (receivedMs == null) {
+      formError(form, 'Choose the date the letter was received.');
+      return Promise.resolve();
+    }
+    var submit = form.querySelector('button[type="submit"]');
+    if (submit) submit.disabled = true;
+    var reader = new FileReader();
+    reader.onload = function () {
+      apiRequest('/api/submissions', {
+        method: 'POST',
+        body: {
+          subject: String(fd.get('subject') || '').trim(),
+          fromRef: String(fd.get('fromRef') || '').trim(),
+          receivedOn: new Date(receivedMs).toISOString(),
+          remarks: String(fd.get('remarks') || '').trim(),
+          attachment: { name: file.name, type: file.type, data: reader.result }
+        }
+      }).then(function (result) {
+        form.reset();
+        form.querySelector('[data-form-error]').hidden = true;
+        return apiRequest('/api/state').then(function (serverState) {
+          applyServerState(serverState);
+          toast('Letter ' + result.letter.refNo + ' submitted to the Technical Section');
+        });
+      }).catch(function (err) {
+        formError(form, err.message || 'The letter could not be submitted.');
+      }).then(function () {
+        if (submit) submit.disabled = false;
+      });
+    };
+    reader.onerror = function () {
+      formError(form, 'The source letter could not be read.');
+      if (submit) submit.disabled = false;
+    };
+    reader.readAsDataURL(file);
+  }
+
   function renderSections() {
     if (!isAuthorized('management')) return;
     var list = $('[data-region="sections"]');
@@ -1474,9 +1599,14 @@
 
     list.innerHTML = state.settings.sections.map(function (name) {
       var used = sectionUsage(name);
+      var userCount = managedAccounts.filter(function (account) {
+        return account.role === 'section_user' && account.sectionName === name;
+      }).length;
       return '<li class="section-row">' +
         '<span class="section-name">' + esc(name) + '</span>' +
         '<span class="tag">' + (used ? used + ' letter' + (used === 1 ? '' : 's') : 'None yet') + '</span>' +
+        '<span class="tag ' + (userCount ? '' : 'tag-warning') + '">' + (userCount ? userCount + ' user' + (userCount === 1 ? '' : 's') : 'No user') + '</span>' +
+        '<button class="btn btn-tiny" type="button" data-action="new-section-account" data-id="' + esc(name) + '">Add user</button>' +
         '<button class="btn btn-tiny btn-danger" type="button" data-action="remove-section" data-id="' + esc(name) + '">Remove</button>' +
         '</li>';
     }).join('');
@@ -1497,11 +1627,14 @@
     apiRequest('/api/accounts').then(function (result) {
       managedAccounts = result.accounts || [];
       var count = $('[data-region="account-count"]');
-      if (count) count.textContent = managedAccounts.length + ' administrator account' + (managedAccounts.length === 1 ? '' : 's');
+      if (count) count.textContent = managedAccounts.length + ' account' + (managedAccounts.length === 1 ? '' : 's');
       rows.innerHTML = managedAccounts.map(function (account) {
+        var access = account.isMainAdmin ? 'Main admin' : (account.role === 'section_user'
+          ? 'Section user · ' + account.sectionName
+          : 'Administrator');
         return '<tr>' +
           '<td class="cell-letter"><strong>' + esc(account.username) + '</strong></td>' +
-          '<td>' + (account.isMainAdmin ? 'Main admin' : 'Administrator') + '</td>' +
+          '<td>' + esc(access) + '</td>' +
           '<td class="account-actions">' +
           '<button class="btn btn-tiny" type="button" data-action="' + (account.isMainAdmin ? 'edit-main-admin' : 'edit-account') + '" data-id="' + esc(account.id) + '">Change login</button>' +
           (account.isMainAdmin ? '' : ' <button class="btn btn-tiny btn-danger" type="button" data-action="remove-account" data-id="' + esc(account.id) + '">Remove</button>') +
@@ -1509,24 +1642,41 @@
       }).join('');
       if (empty) empty.innerHTML = '';
       $('.account-table').hidden = managedAccounts.length === 0;
+      renderSections();
     }).catch(function (err) { toast(err.message); });
   }
 
-  function openAccountForm(id) {
+  function openAccountForm(id, defaultRole, defaultSection) {
     if (!isMainAdministrator()) return;
     var account = id ? managedAccounts.filter(function (item) { return item.id === id; })[0] : null;
     if (id && !account) return;
+    var role = account ? account.role : (defaultRole || 'admin');
+    var sectionName = account ? account.sectionName : (defaultSection || '');
+    var sectionOptions = state.settings.sections.map(function (section) {
+      return '<option value="' + esc(section) + '"' + (section === sectionName ? ' selected' : '') + '>' + esc(section) + '</option>';
+    }).join('');
     openModal('<form class="modal-form">' +
-      '<div class="modal-head"><div><p class="modal-eyebrow">Administrator access</p><h2>' +
-      (account ? 'Change administrator login' : 'Create user') + '</h2></div>' +
+      '<div class="modal-head"><div><p class="modal-eyebrow">Account access</p><h2>' +
+      (account ? 'Change account login' : role === 'section_user' ? 'Create section user' : 'Create administrator') + '</h2></div>' +
       '<button class="icon-btn" type="button" data-action="close-modal" aria-label="Close">' + iconClose() + '</button></div>' +
       '<div class="modal-body"><div class="form-grid">' +
       '<label class="field"><span>Username</span><input name="username" value="' + esc(account ? account.username : '') + '" maxlength="24" required autocomplete="off"></label>' +
       '<label class="field"><span>' + (account ? 'Set new password (optional)' : 'Password') + '</span><input type="password" name="password" minlength="8" ' + (!account ? 'required ' : '') + 'autocomplete="new-password"></label>' +
       '<label class="field"><span>Confirm password</span><input type="password" name="password2" ' + (!account ? 'required ' : '') + 'autocomplete="new-password"></label>' +
-      '</div><p class="form-note">This user will have administrator access. Passwords are stored as salted hashes in the server database.</p><p class="form-error" data-form-error hidden></p></div>' +
-      '<div class="modal-foot"><button class="btn" type="button" data-action="close-modal">Cancel</button><button class="btn btn-primary" type="submit">' + (account ? 'Save login' : 'Create user') + '</button></div>' +
+      '<label class="field"><span>Account type</span><select name="role"' + (account && account.isMainAdmin ? ' disabled' : '') + '>' +
+      '<option value="admin"' + (role === 'admin' ? ' selected' : '') + '>Administrator</option>' +
+      '<option value="section_user"' + (role === 'section_user' ? ' selected' : '') + '>Section user</option>' +
+      '</select></label>' +
+      '<label class="field span-2" data-account-section' + (role === 'section_user' ? '' : ' hidden') + '><span>Assigned section</span><select name="sectionName">' +
+      '<option value="">Select a section</option>' + sectionOptions + '</select></label>' +
+      '</div><p class="form-note">Passwords are stored as salted hashes in the server database.</p><p class="form-error" data-form-error hidden></p></div>' +
+      '<div class="modal-foot"><button class="btn" type="button" data-action="close-modal">Cancel</button><button class="btn btn-primary" type="submit">' + (account ? 'Save account' : 'Create account') + '</button></div>' +
       '</form>', function (fd, form) { saveAccount(fd, form, account); });
+    var roleInput = $('select[name="role"]', modalEl);
+    if (roleInput) roleInput.addEventListener('change', function () {
+      var sectionField = $('[data-account-section]', modalEl);
+      if (sectionField) sectionField.hidden = roleInput.value !== 'section_user';
+    });
   }
 
   function saveAccount(fd, form, existing) {
@@ -1534,6 +1684,8 @@
     var username = String(fd.get('username') || '').trim();
     var password = String(fd.get('password') || '');
     var confirmPassword = String(fd.get('password2') || '');
+    var role = String(fd.get('role') || 'admin') === 'section_user' ? 'section_user' : 'admin';
+    var sectionName = String(fd.get('sectionName') || '').trim();
     if (!USERNAME_RE.test(username)) {
       formError(form, 'The username needs 3 to 24 letters, digits, dots, dashes or underscores.');
       return Promise.resolve();
@@ -1550,10 +1702,14 @@
       formError(form, 'The two password entries do not match.');
       return Promise.resolve();
     }
+    if (role === 'section_user' && !sectionName) {
+      formError(form, 'Choose the section this user belongs to.');
+      return Promise.resolve();
+    }
 
     return apiRequest(existing ? '/api/accounts/' + encodeURIComponent(existing.id) : '/api/accounts', {
       method: existing ? 'PATCH' : 'POST',
-      body: { username: username, password: password }
+      body: { username: username, password: password, role: role, sectionName: sectionName }
     }).then(function () {
       closeModal();
       renderAccounts();
@@ -1639,12 +1795,16 @@
     }
 
     state.settings.sections.push(name);
-    persist();
-    input.value = '';
-    input.focus();
-    syncShell();
-    renderSections();
-    toast(name + ' added');
+    persist().then(function () {
+      input.value = '';
+      input.focus();
+      syncShell();
+      renderSections();
+      toast(name + ' added');
+    }).catch(function (err) {
+      state.settings.sections = state.settings.sections.filter(function (section) { return section !== name; });
+      toast(err.message || 'The section could not be saved.');
+    });
   }
 
   function confirmDialog(title, message, confirmLabel, onConfirm) {
@@ -1669,6 +1829,13 @@
 
   function removeSection(name) {
     if (!isAuthorized('management')) return;
+    var assignedUsers = managedAccounts.filter(function (account) {
+      return account.role === 'section_user' && account.sectionName === name;
+    }).length;
+    if (assignedUsers) {
+      toast('Reassign or remove the ' + assignedUsers + ' section user' + (assignedUsers === 1 ? '' : 's') + ' before removing this section.');
+      return;
+    }
     var used = sectionUsage(name);
     var message = 'Remove “' + name + '” from the section list?';
     if (used) {
@@ -1676,11 +1843,18 @@
         ' use this section. They keep the name and stay in the register.';
     }
     confirmDialog('Remove section', message, 'Remove section', function () {
+      var previousSections = state.settings.sections.slice();
       state.settings.sections = state.settings.sections.filter(function (s) { return s !== name; });
-      persist();
-      syncShell();
-      renderSections();
-      toast(name + ' removed');
+      persist().then(function () {
+        syncShell();
+        renderSections();
+        toast(name + ' removed');
+      }).catch(function (err) {
+        state.settings.sections = previousSections;
+        syncShell();
+        renderSections();
+        toast(err.message || 'The section could not be removed.');
+      });
     });
   }
 
@@ -2134,6 +2308,12 @@
       case 'new-account':
         openAccountForm();
         break;
+      case 'new-admin-account':
+        openAccountForm(null, 'admin');
+        break;
+      case 'new-section-account':
+        openAccountForm(null, 'section_user', id);
+        break;
       case 'edit-account':
         openAccountForm(id);
         break;
@@ -2246,6 +2426,9 @@
     } else if (page === 'management') {
       wireManagementPage();
       refreshManagement();
+    } else if (page === 'section') {
+      wireSectionPage();
+      refreshSectionPage();
     } else {
       wireView();
       refreshView();

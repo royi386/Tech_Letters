@@ -1,15 +1,17 @@
 # Technical Section · Letter Monitoring — Electric Loco Shed, Erode
 
-A three-page portal for tracking letters that come to the Technical Section from the tech
+A four-page portal for tracking letters that come to the Technical Section from the tech
 sections, through drafting and signature, until they are dispatched.
 
 - **`index.html` — status board.** Read-only view of where every letter is right now.
 - **`admin.html` — admin console.** The register: enter letters, move them, dispatch them.
 - **`management.html` — Management.** Maintains the list of sections and administrator-managed user accounts.
+- **`section.html` — Section portal.** Section users submit incoming letters and upload the source document.
 
-The admin console and the Management page use server-side username/password authentication and a
-server-verified captcha. Letter records, settings, and account data are stored in SQLite. No npm
-packages or internet connection are required; use Node.js 24 or newer.
+The admin console, Management page, and Section portal use server-side username/password
+authentication and a server-verified captcha. Letter records, settings, account data, and uploaded
+source documents are stored in SQLite. No npm packages or internet connection are required; use
+Node.js 24 or newer.
 
 ## Running it
 
@@ -24,8 +26,10 @@ Then open <http://127.0.0.1:5173>. The admin console is at `/admin.html` and sec
 at `/management.html`.
 
 The initial Main admin login is username `roy`, password `asdfasdf`. Change this password
-immediately after signing in from Management → Administrator accounts. Both protected pages show
-a sign-in form; account creation is only available to the Main admin.
+immediately after signing in from Management → Accounts. The Main admin can create administrator
+accounts or section-user accounts, each bound to one active section. Section users sign in at
+`/section.html`, submit letters into the admin register at **Received**, and can view submissions
+from their own section. Uploads accept PDF, JPG, PNG, or DOCX files up to 8 MB.
 
 For other computers, set `HOST=0.0.0.0` and `COOKIE_SECURE=1`, then place the server behind a
 trusted HTTPS reverse proxy. Do not send passwords over plain HTTP on a shared network.
@@ -98,12 +102,12 @@ Every action is appended to the letter's movement history with the date, time an
 ## Settings and backup
 
 Settings covers the shed and section names, the "Recorded by" name, the letter reference prefix,
-the officers, the dispatch routes, the number of days after which a pending letter is marked
-delayed, and a backup panel.
+the officers, the dispatch routes (including **Handed Over**), the number of days after which a
+pending letter is marked delayed, and a backup panel.
 
 ## Where the data lives — read this before real use
 
-Records, settings, account hashes, and sessions are stored in `data/portal.sqlite`. The generated
+Records, settings, account hashes, sessions, and uploaded source letters are stored in `data/portal.sqlite`. The generated
 `data/app.key` encrypts usernames and keys their HMAC lookup values; keep it private and back it up
 with the database. If the key is lost, encrypted usernames cannot be recovered. The server must be
 running for sign-in and database-backed changes.
@@ -118,6 +122,7 @@ exported as CSV.
 index.html          status board
 admin.html          admin console
 management.html     section list maintenance
+section.html        sign-in and letter submission for section users
 assets/styles.css   styles and print layout
 assets/app.js       store, workflow, views, sign-in, captcha, backup
 serve.js            SQLite API and static server

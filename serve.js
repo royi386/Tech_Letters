@@ -37,6 +37,8 @@ db.exec(`
     password_salt TEXT NOT NULL,
     password_hash TEXT NOT NULL,
     is_main_admin INTEGER NOT NULL DEFAULT 0,
+    role TEXT NOT NULL DEFAULT 'admin',
+    section_name TEXT,
     created_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS sessions (
@@ -48,11 +50,30 @@ db.exec(`
     id INTEGER PRIMARY KEY CHECK (id = 1),
     settings_json TEXT NOT NULL,
     letters_json TEXT NOT NULL,
-    initialized INTEGER NOT NULL DEFAULT 0
+    initialized INTEGER NOT NULL DEFAULT 0,
+    revision INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS letter_attachments (
+    letter_id TEXT PRIMARY KEY,
+    filename TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    data BLOB NOT NULL,
+    created_at TEXT NOT NULL
   );
   INSERT OR IGNORE INTO portal_state (id, settings_json, letters_json, initialized)
     VALUES (1, '{}', '[]', 0);
 `);
+
+function ensureColumn(table, column, definition) {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!columns.some((item) => item.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+
+ensureColumn('accounts', 'role', "TEXT NOT NULL DEFAULT 'admin'");
+ensureColumn('accounts', 'section_name', 'TEXT');
+ensureColumn('portal_state', 'revision', 'INTEGER NOT NULL DEFAULT 0');
 
 function hashUsername(username) {
   return crypto.createHmac('sha256', appKey).update(username.trim().toLowerCase()).digest('hex');
@@ -103,12 +124,13 @@ function sendJson(res, status, value, headers) {
   res.end(JSON.stringify(value));
 }
 
-function readBody(req) {
+function readBody(req, maxBytes) {
+  maxBytes = maxBytes || 5 * 1024 * 1024;
   return new Promise((resolve, reject) => {
     let body = '';
     req.on('data', (chunk) => {
       body += chunk;
-      if (body.length > 5 * 1024 * 1024) {
+      if (body.length > maxBytes) {
         reject(Object.assign(new Error('Request is too large.'), { status: 413 }));
         req.destroy();
       }
@@ -126,13 +148,19 @@ function sessionAccount(req) {
     .find((part) => part.startsWith('elx_session='));
   if (!cookie) return null;
   const tokenHash = crypto.createHash('sha256').update(decodeURIComponent(cookie.slice('elx_session='.length))).digest('hex');
-  const row = db.prepare(`SELECT a.id, a.username_cipher, a.is_main_admin, s.expires_at
+  const row = db.prepare(`SELECT a.id, a.username_cipher, a.is_main_admin, a.role, a.section_name, s.expires_at
     FROM sessions s JOIN accounts a ON a.id = s.account_id WHERE s.token_hash = ?`).get(tokenHash);
   if (!row || row.expires_at <= Date.now()) {
     if (row) db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(tokenHash);
     return null;
   }
-  return { id: row.id, username: decryptUsername(row.username_cipher), isMainAdmin: !!row.is_main_admin };
+  return {
+    id: row.id,
+    username: decryptUsername(row.username_cipher),
+    isMainAdmin: !!row.is_main_admin,
+    role: row.role,
+    sectionName: row.section_name || ''
+  };
 }
 
 function requireLogin(req, res, mainAdminOnly) {
@@ -148,20 +176,93 @@ function requireLogin(req, res, mainAdminOnly) {
   return user;
 }
 
+function requireAdmin(req, res) {
+  const user = requireLogin(req, res, false);
+  if (!user) return null;
+  if (user.role !== 'admin') {
+    sendJson(res, 403, { error: 'Administrator access is required.' });
+    return null;
+  }
+  return user;
+}
+
+function requireSectionUser(req, res) {
+  const user = requireLogin(req, res, false);
+  if (!user) return null;
+  if (user.role !== 'section_user' || !user.sectionName) {
+    sendJson(res, 403, { error: 'A section user account is required.' });
+    return null;
+  }
+  return user;
+}
+
+function activeSection(name) {
+  const row = db.prepare('SELECT settings_json FROM portal_state WHERE id = 1').get();
+  const settings = JSON.parse(row.settings_json);
+  return Array.isArray(settings.sections) && settings.sections.includes(name);
+}
+
+function sectionReferenceCode(section) {
+  const techMatch = String(section || '').match(/^Tech\s+(\d+[A-Za-z]?)/i);
+  if (techMatch) return techMatch[1].toUpperCase();
+  return String(section || '').toUpperCase().replace(/[^A-Z0-9]+/g, '').slice(0, 12) || 'OTHER';
+}
+
+function nextSectionReference(section, settings, letters) {
+  const code = sectionReferenceCode(section);
+  const base = String(settings.refPrefix || 'TS') + '/' + code + '/';
+  let count = 0;
+  let maxSequence = 0;
+  for (const letter of letters) {
+    if (sectionReferenceCode(letter.fromSection) !== code) continue;
+    count++;
+    if (!String(letter.refNo || '').startsWith(base)) continue;
+    const sequence = Number(String(letter.refNo).slice(base.length));
+    if (Number.isInteger(sequence) && sequence > maxSequence) maxSequence = sequence;
+  }
+  return base + (Math.max(count, maxSequence) + 1);
+}
+
+const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+const ALLOWED_ATTACHMENT_TYPES = new Set([
+  'application/pdf',
+  'image/jpeg',
+  'image/png',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+]);
+
+function parseAttachment(value) {
+  if (!value || typeof value !== 'object') throw Object.assign(new Error('Upload the source letter.'), { status: 400 });
+  const filename = path.basename(String(value.name || '').replace(/\\/g, '/')).replace(/[\u0000-\u001f\u007f"]/g, '').trim();
+  const contentType = String(value.type || '').toLowerCase();
+  const encoded = String(value.data || '').replace(/^data:[^,]*;base64,/, '');
+  if (!filename || filename.length > 180) throw Object.assign(new Error('Use a filename under 180 characters.'), { status: 400 });
+  if (!ALLOWED_ATTACHMENT_TYPES.has(contentType)) {
+    throw Object.assign(new Error('Upload a PDF, JPG, PNG, or DOCX file.'), { status: 400 });
+  }
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) throw Object.assign(new Error('The uploaded file is invalid.'), { status: 400 });
+  const data = Buffer.from(encoded, 'base64');
+  if (!data.length || data.length > MAX_ATTACHMENT_BYTES || data.toString('base64') !== encoded) {
+    throw Object.assign(new Error('The source letter must be no larger than 8 MB.'), { status: 400 });
+  }
+  return { filename, contentType, data };
+}
+
 function accountByUsername(username) {
   const row = db.prepare('SELECT * FROM accounts WHERE username_hash = ?').get(hashUsername(username));
   if (!row) return null;
   return Object.assign({}, row, { username: decryptUsername(row.username_cipher) });
 }
 
-function createAccount(username, password, isMainAdmin) {
+function createAccount(username, password, isMainAdmin, role, sectionName) {
   const salt = crypto.randomBytes(16).toString('hex');
   const passwordHash = crypto.pbkdf2Sync(password, salt, PASSWORD_ITERATIONS, 32, 'sha256').toString('hex');
   db.prepare(`INSERT INTO accounts
-    (id, username_hash, username_cipher, password_salt, password_hash, is_main_admin, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    (id, username_hash, username_cipher, password_salt, password_hash, is_main_admin, role, section_name, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(isMainAdmin ? 'main-admin' : crypto.randomUUID(), hashUsername(username), encryptUsername(username), salt,
-      passwordHash, isMainAdmin ? 1 : 0, new Date().toISOString());
+      passwordHash, isMainAdmin ? 1 : 0, isMainAdmin ? 'admin' : role, isMainAdmin ? null : sectionName || null,
+      new Date().toISOString());
 }
 
 async function handleApi(req, res, url) {
@@ -191,7 +292,13 @@ async function handleApi(req, res, url) {
     const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
     const expires = Date.now() + SESSION_MS;
     db.prepare('INSERT INTO sessions (token_hash, account_id, expires_at) VALUES (?, ?, ?)').run(tokenHash, account.id, expires);
-    return sendJson(res, 200, { user: { id: account.id, username: account.username, isMainAdmin: !!account.is_main_admin } }, {
+    return sendJson(res, 200, { user: {
+      id: account.id,
+      username: account.username,
+      isMainAdmin: !!account.is_main_admin,
+      role: account.role,
+      sectionName: account.section_name || ''
+    } }, {
       'set-cookie': `elx_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_MS / 1000}${COOKIE_SECURE}`
     });
   }
@@ -212,27 +319,166 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/state') {
-    const row = db.prepare('SELECT settings_json, letters_json, initialized FROM portal_state WHERE id = 1').get();
+    const row = db.prepare('SELECT settings_json, letters_json, initialized, revision FROM portal_state WHERE id = 1').get();
+    const user = sessionAccount(req);
+    const settings = JSON.parse(row.settings_json);
+    let letters = JSON.parse(row.letters_json);
+    if (user && user.role === 'section_user') {
+      letters = letters.filter((letter) => letter.fromSection === user.sectionName);
+      return sendJson(res, 200, {
+        settings: {
+          shed: settings.shed,
+          unit: settings.unit,
+          refPrefix: settings.refPrefix,
+          sections: [user.sectionName]
+        },
+        letters,
+        initialized: !!row.initialized,
+        revision: row.revision
+      });
+    }
     return sendJson(res, 200, {
-      settings: JSON.parse(row.settings_json),
-      letters: JSON.parse(row.letters_json),
-      initialized: !!row.initialized
+      settings,
+      letters,
+      initialized: !!row.initialized,
+      revision: row.revision
     });
   }
 
   if (req.method === 'PUT' && url.pathname === '/api/state') {
-    if (!requireLogin(req, res, false)) return;
+    if (!requireAdmin(req, res)) return;
     const body = await readBody(req);
     if (!body.settings || !Array.isArray(body.letters)) return sendJson(res, 400, { error: 'Invalid portal state.' });
-    db.prepare('UPDATE portal_state SET settings_json = ?, letters_json = ?, initialized = 1 WHERE id = 1')
-      .run(JSON.stringify(body.settings), JSON.stringify(body.letters));
-    return sendJson(res, 200, { ok: true });
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const current = db.prepare('SELECT revision FROM portal_state WHERE id = 1').get();
+      if (!Number.isInteger(body.revision) || body.revision !== current.revision) {
+        db.exec('ROLLBACK');
+        return sendJson(res, 409, { error: 'The register changed in another session. Reload the page before saving again.' });
+      }
+      const activeSections = new Set(body.settings.sections || []);
+      const assigned = db.prepare("SELECT DISTINCT section_name FROM accounts WHERE role = 'section_user' AND section_name IS NOT NULL").all();
+      if (assigned.some((row) => !activeSections.has(row.section_name))) {
+        db.exec('ROLLBACK');
+        return sendJson(res, 409, { error: 'Reassign or remove section users before removing their section.' });
+      }
+      const revision = current.revision + 1;
+      db.prepare('UPDATE portal_state SET settings_json = ?, letters_json = ?, initialized = 1, revision = ? WHERE id = 1')
+        .run(JSON.stringify(body.settings), JSON.stringify(body.letters), revision);
+      const retainedLetterIds = new Set(body.letters.map((letter) => String(letter.id)));
+      for (const attachment of db.prepare('SELECT letter_id FROM letter_attachments').all()) {
+        if (!retainedLetterIds.has(attachment.letter_id)) {
+          db.prepare('DELETE FROM letter_attachments WHERE letter_id = ?').run(attachment.letter_id);
+        }
+      }
+      db.exec('COMMIT');
+      return sendJson(res, 200, { ok: true, revision });
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/submissions') {
+    const user = requireSectionUser(req, res);
+    if (!user) return;
+    const body = await readBody(req, 12 * 1024 * 1024);
+    const subject = String(body.subject || '').trim();
+    const fromRef = String(body.fromRef || '').trim();
+    const remarks = String(body.remarks || '').trim();
+    const receivedOn = String(body.receivedOn || '');
+    const receivedTime = Date.parse(receivedOn);
+    if (!subject || subject.length > 240) return sendJson(res, 400, { error: 'Enter a subject under 240 characters.' });
+    if (fromRef.length > 120 || remarks.length > 1000) return sendJson(res, 400, { error: 'The reference or remarks are too long.' });
+    if (!Number.isFinite(receivedTime)) return sendJson(res, 400, { error: 'Enter a valid received date.' });
+    let attachment;
+    try { attachment = parseAttachment(body.attachment); }
+    catch (err) { return sendJson(res, err.status || 400, { error: err.message }); }
+
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      if (!activeSection(user.sectionName)) {
+        db.exec('ROLLBACK');
+        return sendJson(res, 409, { error: 'Your assigned section is no longer active. Contact the Main admin.' });
+      }
+      const row = db.prepare('SELECT settings_json, letters_json, revision FROM portal_state WHERE id = 1').get();
+      const settings = JSON.parse(row.settings_json);
+      const letters = JSON.parse(row.letters_json);
+      const now = new Date().toISOString();
+      const letter = {
+        id: crypto.randomUUID(),
+        refNo: nextSectionReference(user.sectionName, settings, letters),
+        subject,
+        fromSection: user.sectionName,
+        fromRef,
+        priority: 'Routine',
+        remarks,
+        receivedOn: new Date(receivedTime).toISOString(),
+        status: 'received',
+        stageSince: new Date(receivedTime).toISOString(),
+        officer: '',
+        draftRef: '',
+        signedOn: null,
+        dispatchMode: '',
+        dispatchRef: '',
+        dispatchedAt: null,
+        history: [{ at: now, action: 'Submitted by section user', status: 'received', by: user.username }],
+        createdAt: now,
+        updatedAt: now,
+        attachment: { name: attachment.filename, type: attachment.contentType }
+      };
+      letters.push(letter);
+      const revision = row.revision + 1;
+      db.prepare('INSERT INTO letter_attachments (letter_id, filename, content_type, data, created_at) VALUES (?, ?, ?, ?, ?)')
+        .run(letter.id, attachment.filename, attachment.contentType, attachment.data, now);
+      db.prepare('UPDATE portal_state SET letters_json = ?, initialized = 1, revision = ? WHERE id = 1')
+        .run(JSON.stringify(letters), revision);
+      db.exec('COMMIT');
+      return sendJson(res, 201, { ok: true, letter, revision });
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  const attachmentMatch = url.pathname.match(/^\/api\/letters\/([a-f0-9-]+)\/attachment$/i);
+  if (attachmentMatch && req.method === 'GET') {
+    const user = requireLogin(req, res, false);
+    if (!user) return;
+    const row = db.prepare('SELECT filename, content_type, data FROM letter_attachments WHERE letter_id = ?').get(attachmentMatch[1]);
+    if (!row) return sendJson(res, 404, { error: 'Source letter not found.' });
+    if (user.role !== 'admin') {
+      if (user.role !== 'section_user' || !user.sectionName) {
+        return sendJson(res, 403, { error: 'You cannot access this source letter.' });
+      }
+      const stateRow = db.prepare('SELECT letters_json FROM portal_state WHERE id = 1').get();
+      const letter = JSON.parse(stateRow.letters_json).find((item) => item.id === attachmentMatch[1]);
+      if (!letter || letter.fromSection !== user.sectionName) {
+        return sendJson(res, 403, { error: 'You cannot access this source letter.' });
+      }
+    }
+    const encodedFilename = encodeURIComponent(row.filename.toWellFormed()).replace(/['()*]/g, (char) =>
+      '%' + char.charCodeAt(0).toString(16).toUpperCase());
+    res.writeHead(200, {
+      'content-type': row.content_type,
+      'content-disposition': `attachment; filename="source-letter"; filename*=UTF-8''${encodedFilename}`,
+      'content-length': row.data.length,
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff'
+    });
+    return res.end(row.data);
   }
 
   if (req.method === 'GET' && url.pathname === '/api/accounts') {
     if (!requireLogin(req, res, true)) return;
-    const accounts = db.prepare('SELECT id, username_cipher, is_main_admin FROM accounts ORDER BY is_main_admin DESC, username_hash').all()
-      .map((row) => ({ id: row.id, username: decryptUsername(row.username_cipher), isMainAdmin: !!row.is_main_admin }));
+    const accounts = db.prepare('SELECT id, username_cipher, is_main_admin, role, section_name FROM accounts ORDER BY is_main_admin DESC, role, section_name, username_hash').all()
+      .map((row) => ({
+        id: row.id,
+        username: decryptUsername(row.username_cipher),
+        isMainAdmin: !!row.is_main_admin,
+        role: row.role,
+        sectionName: row.section_name || ''
+      }));
     return sendJson(res, 200, { accounts });
   }
 
@@ -260,10 +506,13 @@ async function handleApi(req, res, url) {
     const body = await readBody(req);
     const username = String(body.username || '').trim();
     const password = String(body.password || '');
+    const role = body.role === 'section_user' ? 'section_user' : 'admin';
+    const sectionName = role === 'section_user' ? String(body.sectionName || '').trim() : '';
     if (!USERNAME_RE.test(username)) return sendJson(res, 400, { error: 'Username must be 3 to 24 letters, numbers, dots, dashes, or underscores.' });
     if (password.length < 8) return sendJson(res, 400, { error: 'Password must be at least 8 characters.' });
+    if (role === 'section_user' && !activeSection(sectionName)) return sendJson(res, 400, { error: 'Choose an active section for this user.' });
     if (accountByUsername(username)) return sendJson(res, 409, { error: 'That username is already in use.' });
-    createAccount(username, password, false);
+    createAccount(username, password, false, role, sectionName);
     return sendJson(res, 201, { ok: true });
   }
 
@@ -271,22 +520,25 @@ async function handleApi(req, res, url) {
   if (accountMatch && req.method === 'PATCH') {
     if (!requireLogin(req, res, true)) return;
     const body = await readBody(req);
-    const account = db.prepare('SELECT id, is_main_admin FROM accounts WHERE id = ?').get(accountMatch[1]);
+    const account = db.prepare('SELECT id, is_main_admin, role, section_name FROM accounts WHERE id = ?').get(accountMatch[1]);
     if (!account || account.is_main_admin) return sendJson(res, 404, { error: 'Administrator account not found.' });
     const username = String(body.username || '').trim();
     const password = String(body.password || '');
+    const role = body.role === 'section_user' ? 'section_user' : 'admin';
+    const sectionName = role === 'section_user' ? String(body.sectionName || '').trim() : '';
     if (!USERNAME_RE.test(username)) return sendJson(res, 400, { error: 'Username must be 3 to 24 letters, numbers, dots, dashes, or underscores.' });
+    if (role === 'section_user' && !activeSection(sectionName)) return sendJson(res, 400, { error: 'Choose an active section for this user.' });
     const duplicate = accountByUsername(username);
     if (duplicate && duplicate.id !== account.id) return sendJson(res, 409, { error: 'That username is already in use.' });
     if (password && password.length < 8) return sendJson(res, 400, { error: 'Password must be at least 8 characters.' });
     const salt = password ? crypto.randomBytes(16).toString('hex') : null;
     const passwordHash = password ? crypto.pbkdf2Sync(password, salt, PASSWORD_ITERATIONS, 32, 'sha256').toString('hex') : null;
     if (password) {
-      db.prepare(`UPDATE accounts SET username_hash = ?, username_cipher = ?, password_salt = ?, password_hash = ? WHERE id = ?`)
-        .run(hashUsername(username), encryptUsername(username), salt, passwordHash, account.id);
+      db.prepare(`UPDATE accounts SET username_hash = ?, username_cipher = ?, password_salt = ?, password_hash = ?, role = ?, section_name = ? WHERE id = ?`)
+        .run(hashUsername(username), encryptUsername(username), salt, passwordHash, role, sectionName || null, account.id);
     } else {
-      db.prepare('UPDATE accounts SET username_hash = ?, username_cipher = ? WHERE id = ?')
-        .run(hashUsername(username), encryptUsername(username), account.id);
+      db.prepare('UPDATE accounts SET username_hash = ?, username_cipher = ?, role = ?, section_name = ? WHERE id = ?')
+        .run(hashUsername(username), encryptUsername(username), role, sectionName || null, account.id);
     }
     return sendJson(res, 200, { ok: true });
   }
