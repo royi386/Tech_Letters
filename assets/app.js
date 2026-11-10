@@ -1376,7 +1376,17 @@
         body: { username: username, password: password, captcha: captcha, captchaId: String(fd.get('captchaId') || '') }
       }).then(function (result) {
         openAccountSession(result.user);
-        return apiRequest('/api/state').then(function (serverState) {
+        return apiRequest('/api/me').then(function (session) {
+          if (!session.user) {
+            closeSessions();
+            throw new Error('The sign-in cookie was not retained. Use HTTPS, or set COOKIE_SECURE=0 only when testing over HTTP.');
+          }
+          currentUser = session.user;
+          return apiRequest('/api/state');
+        }, function (err) {
+          closeSessions();
+          throw err;
+        }).then(function (serverState) {
           var oldLetters = legacyState && Array.isArray(legacyState.letters) ? legacyState.letters : [];
           if (legacyState && (!serverState.initialized || (!serverState.letters.length && oldLetters.length))) {
             state = normalize(legacyState);
