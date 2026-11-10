@@ -336,10 +336,10 @@
     }).then(function () {
       serverInitialized = true;
       storageOk = true;
+      return true;
     }).catch(function (err) {
       storageOk = false;
-      toast(err.message || 'The database could not save this change.');
-      return false;
+      throw err;
     });
   }
 
@@ -1010,7 +1010,12 @@
       }]
     });
     state.letters.push(fresh);
-    finish('Letter ' + fresh.refNo + ' added to the board');
+    return finish('Letter ' + fresh.refNo + ' added to the board').then(function (saved) {
+      if (!saved) {
+        state.letters.pop();
+        formError(form, 'The database could not save this change.');
+      }
+    });
   }
 
   /* ---------------------------------------------------------
@@ -1024,10 +1029,15 @@
   }
 
   function finish(message) {
-    persist();
-    closeModal();
-    refreshCurrentPage();
-    if (message) toast(message);
+    return persist().then(function () {
+      closeModal();
+      refreshCurrentPage();
+      if (message) toast(message);
+      return true;
+    }).catch(function (err) {
+      toast(err.message || 'The database could not save this change.');
+      return false;
+    });
   }
 
   function startDraft(id) {
