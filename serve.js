@@ -62,6 +62,13 @@ db.exec(`
     data BLOB NOT NULL,
     created_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS signed_letter_attachments (
+    letter_id TEXT PRIMARY KEY,
+    filename TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    data BLOB NOT NULL,
+    created_at TEXT NOT NULL
+  );
   INSERT OR IGNORE INTO portal_state (id, settings_json, letters_json, initialized)
     VALUES (1, '{}', '[]', 0);
 `);
@@ -261,6 +268,22 @@ function parseAttachment(value) {
   return { filename, contentType, data };
 }
 
+function parseSignedPdf(value) {
+  const attachment = parseAttachment(Object.assign({}, value, { type: 'application/pdf' }));
+  if (!/\.pdf$/i.test(attachment.filename) || attachment.data.subarray(0, 5).toString('ascii') !== '%PDF-') {
+    throw Object.assign(new Error('Choose a valid PDF file for the signed letter.'), { status: 400 });
+  }
+  return attachment;
+}
+
+function withSignedPdfNames(letters) {
+  const files = db.prepare('SELECT letter_id, filename FROM signed_letter_attachments').all();
+  const names = new Map(files.map((file) => [file.letter_id, file.filename]));
+  return letters.map((letter) => Object.assign({}, letter, {
+    signedPdfName: names.get(String(letter.id)) || ''
+  }));
+}
+
 function accountByUsername(username) {
   const row = db.prepare('SELECT * FROM accounts WHERE username_hash = ?').get(hashUsername(username));
   if (!row) return null;
@@ -343,7 +366,7 @@ async function handleApi(req, res, url) {
     const settings = JSON.parse(row.settings_json);
     let letters = JSON.parse(row.letters_json);
     if (user && user.role === 'section_user') {
-      letters = letters.filter((letter) => letter.fromSection === user.sectionName);
+      letters = withSignedPdfNames(letters.filter((letter) => letter.fromSection === user.sectionName));
       return sendJson(res, 200, {
         settings: {
           shed: settings.shed,
@@ -358,7 +381,7 @@ async function handleApi(req, res, url) {
     }
     return sendJson(res, 200, {
       settings,
-      letters,
+      letters: withSignedPdfNames(letters),
       initialized: !!row.initialized,
       revision: row.revision
     });
@@ -366,8 +389,18 @@ async function handleApi(req, res, url) {
 
   if (req.method === 'PUT' && url.pathname === '/api/state') {
     if (!requireAdmin(req, res)) return;
-    const body = await readBody(req);
+    const body = await readBody(req, 12 * 1024 * 1024);
     if (!body.settings || !Array.isArray(body.letters)) return sendJson(res, 400, { error: 'Invalid portal state.' });
+    let signedPdf = null;
+    if (body.signedPdf) {
+      const signedLetterId = String(body.signedPdf.letterId || '');
+      const signedLetter = body.letters.find((letter) => String(letter.id) === signedLetterId);
+      if (!signedLetter || signedLetter.status !== 'dispatched') {
+        return sendJson(res, 400, { error: 'A signed PDF can only be attached to a dispatched letter.' });
+      }
+      signedPdf = Object.assign(parseSignedPdf(body.signedPdf), { letterId: signedLetterId });
+    }
+    const lettersForStorage = body.letters.map(({ signedPdfName, ...letter }) => letter);
     db.exec('BEGIN IMMEDIATE');
     try {
       const current = db.prepare('SELECT revision FROM portal_state WHERE id = 1').get();
@@ -383,12 +416,24 @@ async function handleApi(req, res, url) {
       }
       const revision = current.revision + 1;
       db.prepare('UPDATE portal_state SET settings_json = ?, letters_json = ?, initialized = 1, revision = ? WHERE id = 1')
-        .run(JSON.stringify(body.settings), JSON.stringify(body.letters), revision);
+        .run(JSON.stringify(body.settings), JSON.stringify(lettersForStorage), revision);
       const retainedLetterIds = new Set(body.letters.map((letter) => String(letter.id)));
       for (const attachment of db.prepare('SELECT letter_id FROM letter_attachments').all()) {
         if (!retainedLetterIds.has(attachment.letter_id)) {
           db.prepare('DELETE FROM letter_attachments WHERE letter_id = ?').run(attachment.letter_id);
         }
+      }
+      for (const attachment of db.prepare('SELECT letter_id FROM signed_letter_attachments').all()) {
+        if (!retainedLetterIds.has(attachment.letter_id)) {
+          db.prepare('DELETE FROM signed_letter_attachments WHERE letter_id = ?').run(attachment.letter_id);
+        }
+      }
+      if (signedPdf) {
+        db.prepare(`INSERT INTO signed_letter_attachments (letter_id, filename, content_type, data, created_at)
+          VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(letter_id) DO UPDATE SET filename = excluded.filename, content_type = excluded.content_type,
+            data = excluded.data, created_at = excluded.created_at`)
+          .run(signedPdf.letterId, signedPdf.filename, signedPdf.contentType, signedPdf.data, new Date().toISOString());
       }
       db.exec('COMMIT');
       return sendJson(res, 200, { ok: true, revision });
@@ -556,6 +601,30 @@ async function handleApi(req, res, url) {
     res.writeHead(200, {
       'content-type': row.content_type,
       'content-disposition': `attachment; filename="source-letter"; filename*=UTF-8''${encodedFilename}`,
+      'content-length': row.data.length,
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff'
+    });
+    return res.end(row.data);
+  }
+
+  const signedPdfMatch = url.pathname.match(/^\/api\/letters\/([a-z0-9-]+)\/signed-pdf$/i);
+  if (signedPdfMatch && req.method === 'GET') {
+    const user = requireLogin(req, res, false);
+    if (!user) return;
+    const stateRow = db.prepare('SELECT letters_json FROM portal_state WHERE id = 1').get();
+    const letter = JSON.parse(stateRow.letters_json).find((item) => item.id === signedPdfMatch[1]);
+    if (!letter || letter.status !== 'dispatched') return sendJson(res, 404, { error: 'Signed letter not found.' });
+    if (user.role !== 'admin' && !(user.role === 'section_user' && user.sectionName === letter.fromSection)) {
+      return sendJson(res, 403, { error: 'You cannot access this signed letter.' });
+    }
+    const row = db.prepare('SELECT filename, data FROM signed_letter_attachments WHERE letter_id = ?').get(signedPdfMatch[1]);
+    if (!row) return sendJson(res, 404, { error: 'Signed letter not found.' });
+    const encodedFilename = encodeURIComponent(row.filename.toWellFormed()).replace(/['()*]/g, (char) =>
+      '%' + char.charCodeAt(0).toString(16).toUpperCase());
+    res.writeHead(200, {
+      'content-type': 'application/pdf',
+      'content-disposition': `attachment; filename="signed-letter.pdf"; filename*=UTF-8''${encodedFilename}`,
       'content-length': row.data.length,
       'cache-control': 'no-store',
       'x-content-type-options': 'nosniff'

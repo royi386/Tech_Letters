@@ -316,6 +316,7 @@ svg{display:block}
 .age.ok{background:var(--teal-soft);color:#0b5f58}
 .age.warn{background:var(--amber-soft);color:#8a5208}
 .age.crit{background:var(--red-soft);color:#9c1c12}
+.age.archived{background:var(--slate-soft);color:var(--muted)}
 .subject{
   font-size:13.5px;font-weight:600;line-height:1.34;color:var(--ink);
   display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;
