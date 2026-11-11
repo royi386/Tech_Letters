@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="light">
+<meta name="color-scheme" content="light dark">
 <title>Admin console · Technical Section letter monitoring</title>
 <meta name="robots" content="noindex">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230d2942'/%3E%3Cpath d='M20 15h16l9 9v25H20z' fill='none' stroke='%23f0b429' stroke-width='4' stroke-linejoin='round'/%3E%3Cpath d='M27 31h12M27 38h12' stroke='%23f0b429' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
@@ -33,6 +33,7 @@
         <span class="clock-date" data-clock-date></span>
         <span class="clock-time" data-clock-time></span>
       </div>
+      <button class="btn btn-ghost-light theme-toggle" type="button" data-theme-toggle aria-label="Switch to night mode" aria-pressed="false">Night mode</button>
       <span class="masthead-session" data-region="session"></span>
       <a class="btn btn-ghost-light" href="management.html">Management</a>
       <a class="btn btn-ghost-light" href="index.html">View status board</a>
@@ -58,6 +59,15 @@
       </div>
     </div>
 
+    <div class="admin-tabs" role="group" aria-label="Letter register views">
+      <button class="admin-tab is-active" type="button" data-admin-tab="open" aria-pressed="true">
+        Open letters <span data-region="open-count">0</span>
+      </button>
+      <button class="admin-tab" type="button" data-admin-tab="dispatched" aria-pressed="false">
+        Dispatched letters <span data-region="dispatched-count">0</span>
+      </button>
+    </div>
+
     <section class="panel toolbar" aria-label="Filter the register">
       <label class="field field-search">
         <span>Search</span>
@@ -71,7 +81,6 @@
           <option value="drafting">Draft preparation</option>
           <option value="with_officer">With officer</option>
           <option value="signed">Signed — to dispatch</option>
-          <option value="dispatched">Dispatched</option>
         </select>
       </label>
       <label class="field">
@@ -82,13 +91,9 @@
         <span>With officer</span>
         <select id="a-officer"><option value="">All officers</option></select>
       </label>
-      <label class="check">
-        <input type="checkbox" id="a-archived">
-        <span>Show archive (over 48 hrs)</span>
-      </label>
     </section>
 
-    <div class="panel table-panel">
+    <div class="panel table-panel" id="admin-table-panel">
       <table class="data-table">
         <thead>
           <tr>

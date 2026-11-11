@@ -16,6 +16,7 @@
      --------------------------------------------------------- */
 
   var KEY = 'elx-erode-letter-monitor-v1';
+  var THEME_KEY = 'elx-erode-letter-monitor-theme-v1';
   var HOUR = 3600000;
   var DAY = 24 * HOUR;
   var ARCHIVE_MS = 48 * HOUR; /* dispatched letters leave the board after 2 days */
@@ -124,6 +125,30 @@
     return String(value == null ? '' : value).replace(/[&<>"']/g, function (ch) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
     });
+  }
+
+  function setTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    document.documentElement.style.colorScheme = theme;
+    var button = $('[data-theme-toggle]');
+    if (button) {
+      var nextLabel = theme === 'dark' ? 'Day mode' : 'Night mode';
+      button.textContent = nextLabel;
+      button.setAttribute('aria-label', 'Switch to ' + nextLabel.toLowerCase());
+      button.setAttribute('aria-pressed', theme === 'dark' ? 'true' : 'false');
+    }
+  }
+
+  function initializeTheme() {
+    var theme = 'light';
+    try { theme = localStorage.getItem(THEME_KEY) === 'dark' ? 'dark' : 'light'; } catch (err) { /* use light theme */ }
+    setTheme(theme);
+  }
+
+  function toggleTheme() {
+    var theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    try { localStorage.setItem(THEME_KEY, theme); } catch (err) { /* keep this choice for the current page */ }
+    setTheme(theme);
   }
 
   function p2(n) { return String(n).padStart(2, '0'); }
@@ -603,13 +628,14 @@
     var dispatched = visible.filter(function (l) { return l.status === 'dispatched'; });
 
     var officerHint = state.settings.officers.map(function (o) {
-      return o + ' ' + withOfficer.filter(function (l) { return l.officer === o; }).length;
-    }).join(' · ');
+      var count = withOfficer.filter(function (l) { return l.officer === o; }).length;
+      return '<span class="officer-count"><span>' + esc(o) + '</span><strong>- ' + count + '</strong></span>';
+    }).join('');
 
     var tiles = [
       { label: 'Open letters', value: open.length, hint: 'currently moving', tone: 'slate' },
       { label: 'With ' + state.settings.unit, value: withSection.length, hint: 'received or being drafted', tone: 'blue' },
-      { label: 'With officers', value: withOfficer.length, hint: officerHint || 'awaiting signature', tone: 'amber' },
+      { label: 'With officers', value: withOfficer.length, hintHtml: officerHint || '<span>Awaiting signature</span>', tone: 'amber' },
       { label: 'Awaiting dispatch', value: toDispatch.length, hint: 'signed and ready to send', tone: 'violet' },
       { label: 'Dispatched', value: dispatched.length, hint: 'leaves the board after 2 days', tone: 'teal' }
     ];
@@ -618,7 +644,7 @@
       return '<article class="tile tile-' + t.tone + '">' +
         '<p class="tile-label">' + esc(t.label) + '</p>' +
         '<p class="tile-value">' + t.value + '</p>' +
-        '<p class="tile-hint">' + esc(t.hint) + '</p>' +
+        '<div class="tile-hint' + (t.hintHtml ? ' officer-counts' : '') + '">' + (t.hintHtml || esc(t.hint)) + '</div>' +
         '</article>';
     }).join('');
   }
@@ -1390,10 +1416,12 @@
       '<h2>' + ROLE_LABEL[role] + ' sign in</h2>' +
       '<p>Enter your username and password, then type the code shown below.</p>' +
       '<form class="gate-form" id="gate-form" autocomplete="off">' +
+      '<div class="gate-credentials">' +
       '<label class="field"><span>Username</span>' +
       '<input name="username" placeholder="Your username" autocomplete="username" spellcheck="false" required></label>' +
       '<label class="field"><span>Password</span>' +
       '<input type="password" name="password" autocomplete="current-password" required></label>' +
+      '</div>' +
       captchaBlockHtml() +
       '<p class="gate-msg" id="gate-msg" role="alert"></p>' +
       '<button class="btn btn-primary" type="submit">Sign in</button>' +
@@ -1958,7 +1986,8 @@
      Admin register
      --------------------------------------------------------- */
 
-  var af = { q: '', status: '', section: '', officer: '', archived: false };
+  var af = { q: '', status: '', section: '', officer: '' };
+  var adminTab = 'open';
 
   function wireManagementPage() {
     var form = $('#add-section-form');
@@ -1979,8 +2008,12 @@
     if (section) section.addEventListener('change', function () { af.section = section.value; renderAdminTable(); });
     var officer = $('#a-officer');
     if (officer) officer.addEventListener('change', function () { af.officer = officer.value; renderAdminTable(); });
-    var archived = $('#a-archived');
-    if (archived) archived.addEventListener('change', function () { af.archived = archived.checked; renderAdminTable(); });
+    $$('[data-admin-tab]').forEach(function (button) {
+      button.addEventListener('click', function () {
+        adminTab = button.getAttribute('data-admin-tab') === 'dispatched' ? 'dispatched' : 'open';
+        renderAdminTable();
+      });
+    });
   }
 
   function rowHtml(l) {
@@ -2015,9 +2048,26 @@
 
     var all = state.letters.slice();
     var archivedCount = all.filter(isArchived).length;
-    var list = af.archived ? all : all.filter(function (l) { return !isArchived(l); });
+    var list = all.filter(function (l) {
+      return adminTab === 'dispatched' ? l.status === 'dispatched' : l.status !== 'dispatched';
+    });
     var filtered = applyFilters(list, af);
-    filtered.sort(adminSort);
+    filtered.sort(function (a, b) {
+      return (parseISO(b.createdAt) || 0) - (parseISO(a.createdAt) || 0) || String(b.id).localeCompare(String(a.id));
+    });
+
+    var openTab = $('[data-admin-tab="open"]');
+    var dispatchedTab = $('[data-admin-tab="dispatched"]');
+    if (openTab) {
+      openTab.setAttribute('aria-pressed', adminTab === 'open' ? 'true' : 'false');
+      openTab.classList.toggle('is-active', adminTab === 'open');
+      $('[data-region="open-count"]').textContent = all.filter(function (l) { return l.status !== 'dispatched'; }).length;
+    }
+    if (dispatchedTab) {
+      dispatchedTab.setAttribute('aria-pressed', adminTab === 'dispatched' ? 'true' : 'false');
+      dispatchedTab.classList.toggle('is-active', adminTab === 'dispatched');
+      $('[data-region="dispatched-count"]').textContent = all.filter(function (l) { return l.status === 'dispatched'; }).length;
+    }
 
     rowsEl.innerHTML = filtered.map(rowHtml).join('');
     if (table) table.hidden = filtered.length === 0;
@@ -2028,7 +2078,8 @@
         emptyEl.innerHTML = '<div class="table-empty"><strong>No letters recorded yet</strong>' +
           'Use “New letter” to enter the first letter received by the section.</div>';
       } else {
-        emptyEl.innerHTML = '<div class="table-empty"><strong>No letters match these filters</strong>' +
+        var emptyLabel = adminTab === 'dispatched' ? 'No dispatched letters match these filters' : 'No open letters match these filters';
+        emptyEl.innerHTML = '<div class="table-empty"><strong>' + emptyLabel + '</strong>' +
           'Clear the search or choose another stage.</div>';
       }
     }
@@ -2481,7 +2532,10 @@
   }
 
   function init() {
+    initializeTheme();
     modalEl = $('#modal');
+    var themeButton = $('[data-theme-toggle]');
+    if (themeButton) themeButton.addEventListener('click', toggleTheme);
 
     if (modalEl) {
       modalEl.addEventListener('submit', function (ev) {
