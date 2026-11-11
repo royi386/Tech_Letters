@@ -926,16 +926,16 @@
       '</div>' +
       '<div class="modal-body">' +
       '<div class="form-grid">' +
-      '<label class="field"><span>Letter reference</span>' +
-      '<input name="refNo" value="' + esc(refValue) + '" required autocomplete="off"></label>' +
-      '<label class="field"><span>Received on</span>' +
-      '<input type="date" name="receivedOn" value="' + esc(receivedValue) + '" required></label>' +
-      '<label class="field span-2"><span>Subject</span>' +
-      '<input name="subject" value="' + esc(editing ? editing.subject : '') + '" required autocomplete="off" placeholder="Short subject of the letter"></label>' +
       '<label class="field"><span>Received from section</span><select name="fromSection" required>' +
       '<option value="">Select a section</option>' + sections.map(function (section) {
         return '<option value="' + esc(section) + '"' + (editing && editing.fromSection === section ? ' selected' : '') + '>' + esc(section) + '</option>';
       }).join('') + '</select></label>' +
+      '<label class="field span-2"><span>Subject</span>' +
+      '<input name="subject" value="' + esc(editing ? editing.subject : '') + '" required autocomplete="off" placeholder="Short subject of the letter"></label>' +
+      '<label class="field"><span>Received on</span>' +
+      '<input type="date" name="receivedOn" value="' + esc(receivedValue) + '" required></label>' +
+      '<label class="field"><span>Letter reference</span>' +
+      '<input name="refNo" value="' + esc(refValue) + '" required autocomplete="off"></label>' +
       '<label class="field"><span>Their letter no. / date</span>' +
       '<input name="fromRef" value="' + esc(editing ? editing.fromRef : '') + '" autocomplete="off" placeholder="Optional"></label>' +
       '<label class="field"><span>Priority</span><select name="priority">' +
@@ -1415,7 +1415,7 @@
         }).then(function (serverState) {
           stateRevision = Number(serverState.revision) || 0;
           var oldLetters = legacyState && Array.isArray(legacyState.letters) ? legacyState.letters : [];
-          if (legacyState && (!serverState.initialized || (!serverState.letters.length && oldLetters.length))) {
+          if (!serverState.initialized || (legacyState && !serverState.letters.length && oldLetters.length)) {
             state = normalize(legacyState);
             return persist().then(function () { return apiRequest('/api/state'); });
           }
