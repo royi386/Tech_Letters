@@ -564,6 +564,14 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { accounts });
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/drafters') {
+    if (!requireAdmin(req, res)) return;
+    const drafters = db.prepare(`SELECT username_cipher FROM accounts
+      WHERE is_main_admin = 1 OR role = 'admin' ORDER BY is_main_admin DESC, username_hash`).all()
+      .map((row) => decryptUsername(row.username_cipher));
+    return sendJson(res, 200, { drafters });
+  }
+
   if (url.pathname === '/api/main-admin' && req.method === 'PATCH') {
     if (!requireLogin(req, res, true)) return;
     const body = await readBody(req);
