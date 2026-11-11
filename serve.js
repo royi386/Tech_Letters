@@ -10,7 +10,9 @@ const root = __dirname;
 const dataDir = path.join(root, 'data');
 const port = Number(process.env.PORT) || 5173;
 const host = process.env.HOST || '127.0.0.1';
-const SESSION_MS = 8 * 60 * 60 * 1000;
+const SESSION_EXPIRES_AT = Date.UTC(9999, 11, 31, 23, 59, 59);
+const SESSION_COOKIE_MAX_AGE = 2147483647;
+const SESSION_COOKIE_EXPIRES = new Date(SESSION_EXPIRES_AT).toUTCString();
 const COOKIE_SECURE = process.env.COOKIE_SECURE === '1' ? '; Secure' : '';
 const PASSWORD_ITERATIONS = 210000;
 const USERNAME_RE = /^[A-Za-z0-9._-]{3,24}$/;
@@ -91,6 +93,10 @@ function decryptUsername(value) {
   const decipher = crypto.createDecipheriv('aes-256-gcm', appKey, Buffer.from(ivHex, 'hex'));
   decipher.setAuthTag(Buffer.from(tagHex, 'hex'));
   return Buffer.concat([decipher.update(Buffer.from(dataHex, 'hex')), decipher.final()]).toString('utf8');
+}
+
+function sessionCookie(token) {
+  return `elx_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_COOKIE_MAX_AGE}; Expires=${SESSION_COOKIE_EXPIRES}${COOKIE_SECURE}`;
 }
 
 function safeEqualHex(left, right) {
@@ -297,8 +303,8 @@ async function handleApi(req, res, url) {
     }
     const token = crypto.randomBytes(32).toString('hex');
     const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
-    const expires = Date.now() + SESSION_MS;
-    db.prepare('INSERT INTO sessions (token_hash, account_id, expires_at) VALUES (?, ?, ?)').run(tokenHash, account.id, expires);
+    db.prepare('INSERT INTO sessions (token_hash, account_id, expires_at) VALUES (?, ?, ?)')
+      .run(tokenHash, account.id, SESSION_EXPIRES_AT);
     return sendJson(res, 200, { user: {
       id: account.id,
       username: account.username,
@@ -306,7 +312,7 @@ async function handleApi(req, res, url) {
       role: account.role,
       sectionName: account.section_name || ''
     } }, {
-      'set-cookie': `elx_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_MS / 1000}${COOKIE_SECURE}`
+      'set-cookie': sessionCookie(token)
     });
   }
 
@@ -322,7 +328,13 @@ async function handleApi(req, res, url) {
 
   if (req.method === 'GET' && url.pathname === '/api/me') {
     const user = sessionAccount(req);
-    return sendJson(res, 200, { user: user || null });
+    if (!user) return sendJson(res, 200, { user: null });
+    const cookie = String(req.headers.cookie || '').split(';').map((part) => part.trim())
+      .find((part) => part.startsWith('elx_session='));
+    const token = decodeURIComponent(cookie.slice('elx_session='.length));
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    db.prepare('UPDATE sessions SET expires_at = ? WHERE token_hash = ?').run(SESSION_EXPIRES_AT, tokenHash);
+    return sendJson(res, 200, { user }, { 'set-cookie': sessionCookie(token) });
   }
 
   if (req.method === 'GET' && url.pathname === '/api/state') {

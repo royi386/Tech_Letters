@@ -204,6 +204,9 @@ svg{display:block}
   color:var(--ink);font-variant-numeric:tabular-nums;letter-spacing:-.02em;
 }
 .tile-hint{font-size:12px;color:var(--muted-2);margin-top:2px;line-height:1.35}
+.officer-counts{display:grid;gap:1px}
+.officer-count{display:flex;justify-content:space-between;gap:8px;line-height:1.35}
+.officer-count strong{font-variant-numeric:tabular-nums;font-weight:650;white-space:nowrap}
 .tile-slate{--tile-color:#64748b}
 .tile-blue{--tile-color:#2563eb}
 .tile-amber{--tile-color:var(--amber-bright)}
@@ -511,6 +514,8 @@ dialog.modal[open]{display:flex;flex-direction:column;animation:pop .16s ease-ou
 .gate-card h2{font-size:19px;font-weight:750;margin-bottom:6px}
 .gate-card > p{font-size:13.4px;color:var(--muted);margin-bottom:16px}
 .gate-form{display:flex;flex-direction:column;gap:12px}
+.gate-credentials{display:grid;gap:4px}
+.gate-credentials .field{gap:3px}
 .gate-msg{font-size:12.5px;font-weight:600;color:var(--red);min-height:0}
 .gate-msg:empty{display:none}
 .gate-hint{font-size:11.8px;color:var(--muted-2);margin-top:2px;line-height:1.45}
@@ -599,6 +604,19 @@ dialog.modal[open]{display:flex;flex-direction:column;animation:pop .16s ease-ou
 .section-title{font-size:20px;font-weight:750;letter-spacing:-.01em}
 .section-sub{font-size:12.8px;color:var(--muted);margin-top:3px}
 .admin-actions{display:flex;gap:9px;flex-wrap:wrap}
+.admin-tabs{display:flex;gap:6px;border-bottom:1px solid var(--line);margin:14px 0 12px}
+.admin-tab{
+  display:inline-flex;align-items:center;gap:8px;min-height:40px;padding:0 12px;
+  border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);
+  font-size:13px;font-weight:650;cursor:pointer;
+}
+.admin-tab:hover{color:var(--ink);background:var(--card-alt)}
+.admin-tab.is-active{color:var(--ink);border-bottom-color:var(--amber-bright)}
+.admin-tab span{
+  min-width:22px;padding:1px 6px;border-radius:999px;background:var(--slate-soft);
+  color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums;text-align:center;
+}
+.admin-tab:focus-visible{outline-offset:-3px}
 
 .table-panel{overflow:hidden}
 .data-table{width:100%;border-collapse:collapse;font-size:13.3px}
@@ -644,6 +662,89 @@ dialog.modal[open]{display:flex;flex-direction:column;animation:pop .16s ease-ou
 }
 .toast.show{opacity:1;transform:translate(-50%,0)}
 
+/* ---------------- Day and night themes ---------------- */
+
+html[data-theme="dark"]{
+  color-scheme:dark;
+  --ink:#e7edf4;
+  --ink-2:#c3cfdb;
+  --muted:#a9b8c8;
+  --muted-2:#91a3b6;
+  --line:#33475a;
+  --line-strong:#53687d;
+  --bg:#101b27;
+  --card:#192735;
+  --card-alt:#202f3e;
+  --amber:#f0bb58;
+  --amber-soft:#49391b;
+  --teal:#55c7b5;
+  --teal-soft:#193b37;
+  --red:#ff938a;
+  --red-soft:#482523;
+  --blue:#91b8ff;
+  --blue-soft:#203656;
+  --violet:#c3a0ef;
+  --violet-soft:#38284a;
+  --slate-soft:#263746;
+  --shadow-sm:0 1px 2px rgba(0,0,0,.24),0 1px 3px rgba(0,0,0,.18);
+  --shadow-md:0 6px 18px rgba(0,0,0,.25),0 2px 4px rgba(0,0,0,.18);
+  --shadow-lg:0 30px 80px rgba(0,0,0,.56);
+}
+
+html[data-theme="dark"] body{
+  background:radial-gradient(900px 380px at 100% 0,rgba(102,151,192,.08),transparent 70%),var(--bg);
+}
+html[data-theme="dark"] a{color:#9bc8ee}
+html[data-theme="dark"] .btn:not(.btn-primary):not(.btn-ghost-light){
+  --btn-bg:var(--card);--btn-fg:var(--ink);--btn-bd:var(--line-strong);
+}
+html[data-theme="dark"] .btn:not(.btn-primary):not(.btn-ghost-light):hover{background:#263848}
+html[data-theme="dark"] .btn-quiet:hover{background:#263848}
+html[data-theme="dark"] .icon-btn,
+html[data-theme="dark"] .field select,
+html[data-theme="dark"] .field input,
+html[data-theme="dark"] .field textarea,
+html[data-theme="dark"] .check,
+html[data-theme="dark"] .radio-chip span,
+html[data-theme="dark"] .radio-chip span::before,
+html[data-theme="dark"] .count,
+html[data-theme="dark"] .letter-card,
+html[data-theme="dark"] dialog.modal,
+html[data-theme="dark"] .footer,
+html[data-theme="dark"] .noscript,
+html[data-theme="dark"] .storage-note{background-color:var(--card);color:var(--ink)}
+html[data-theme="dark"] .col{background:var(--card-alt);box-shadow:none}
+html[data-theme="dark"] .none{background:var(--card)}
+html[data-theme="dark"] .field input[readonly],
+html[data-theme="dark"] .action-bar,
+html[data-theme="dark"] .radio-chip input:checked + span{background:#243649}
+html[data-theme="dark"] .radio-chip input:checked + span::before{box-shadow:inset 0 0 0 3px var(--card)}
+html[data-theme="dark"] .section-row{border-color:var(--line)}
+html[data-theme="dark"] .tag{color:#d0dbe6;background:#293b4b;border-color:#405367}
+html[data-theme="dark"] .tag-officer{color:#ffd27b;background:#49391b;border-color:#68552d}
+html[data-theme="dark"] .tag-teal{color:#9be2d5;background:#193b37;border-color:#2d5b54}
+html[data-theme="dark"] .tag-warning{color:#ffd27b;background:#49391b;border-color:#68552d}
+html[data-theme="dark"] .age.ok{color:#a7e8d9}
+html[data-theme="dark"] .age.warn{color:#ffd27b}
+html[data-theme="dark"] .age.crit{color:#ffaaa3}
+html[data-theme="dark"] .prio.p-routine{color:#b4c1ce}
+html[data-theme="dark"] .prio.p-urgent{color:#ffc15c}
+html[data-theme="dark"] .prio.p-immediate{color:#ff938a}
+html[data-theme="dark"] .pill.s-received{color:#d2deea}
+html[data-theme="dark"] .pill.s-drafting{color:#a9c5ff}
+html[data-theme="dark"] .pill.s-with_officer{color:#ffd27b}
+html[data-theme="dark"] .pill.s-signed{color:#d1b3f2}
+html[data-theme="dark"] .pill.s-dispatched{color:#9be2d5}
+html[data-theme="dark"] .data-table tbody td{border-color:var(--line)}
+html[data-theme="dark"] .data-table tbody tr:hover{background:#202f3e}
+html[data-theme="dark"] .storage-note.is-warn{background:#332a1b;color:#ffd27b;border-color:#68552d}
+html[data-theme="dark"] .captcha-code{
+  background:repeating-linear-gradient(115deg,rgba(176,207,234,.09) 0 1px,transparent 1px 9px),
+    repeating-linear-gradient(35deg,rgba(176,207,234,.06) 0 1px,transparent 0 13px),
+    linear-gradient(180deg,#233445,#182634);
+  color:#d5e5f4;
+}
+
 /* ---------------- Responsive ---------------- */
 
 @media (max-width:900px){
@@ -686,6 +787,8 @@ dialog.modal[open]{display:flex;flex-direction:column;animation:pop .16s ease-ou
   .detail-grid dt{margin-top:9px}
   .form-grid{grid-template-columns:1fr}
   .form-grid .span-2{grid-column:auto}
+  .gate-form{gap:10px}
+  .gate-credentials{gap:2px}
   .modal-head{padding:16px 16px 12px}
   .modal-body{padding:15px 16px}
   .modal-foot{padding:12px 16px}
