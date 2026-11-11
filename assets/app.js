@@ -318,6 +318,7 @@
       status: STATUS[raw.status] ? raw.status : 'received',
       stageSince: isoOrNull(raw.stageSince) || isoOrNull(raw.receivedOn) || nowISO(),
       officer: raw.officer ? String(raw.officer) : '',
+      draftAssignee: String(raw.draftAssignee || '').trim(),
       draftRef: String(raw.draftRef || ''),
       signedOn: isoOrNull(raw.signedOn),
       dispatchMode: raw.dispatchMode ? String(raw.dispatchMode) : '',
@@ -418,7 +419,7 @@
       if (f.status && l.status !== f.status) return false;
       if (f.delayed && (l.status === 'dispatched' || stageDays(l) < sla)) return false;
       if (q) {
-        var hay = [l.refNo, l.subject, l.fromSection, l.fromRef, l.officer, l.remarks, l.dispatchMode, l.dispatchRef]
+        var hay = [l.refNo, l.subject, l.fromSection, l.fromRef, l.officer, l.draftAssignee, l.remarks, l.dispatchMode, l.dispatchRef]
           .join(' ').toLowerCase();
         if (hay.indexOf(q) < 0) return false;
       }
@@ -666,6 +667,9 @@
     var signedTag = l.status === 'signed' && l.officer
       ? '<span class="tag tag-officer">Signed by ' + esc(l.officer) + '</span>'
       : '';
+    var drafterTag = l.status === 'drafting' && l.draftAssignee
+      ? '<span class="tag">Drafting: ' + esc(l.draftAssignee) + '</span>'
+      : '';
     var sentTag = isSent
       ? '<span class="tag tag-teal">Sent via ' + esc(l.dispatchMode || 'dispatch') + '</span>'
       : '';
@@ -678,7 +682,7 @@
       '<span class="subject">' + esc(l.subject) + '</span>' +
       '<span class="card-tags">' +
       '<span class="tag">From ' + esc(l.fromSection) + '</span>' +
-      officerTag + signedTag + sentTag +
+      officerTag + signedTag + drafterTag + sentTag +
       '</span>' +
       '<span class="card-foot">' +
       '<span class="prio p-' + String(l.priority).toLowerCase() + '">' + esc(l.priority) + '</span>' +
@@ -776,6 +780,7 @@
       ['Priority', letter.priority],
       ['Current position', positionOf(letter)],
       ['Officer', letter.officer || '—'],
+      ['Draft assigned to', letter.draftAssignee || '—'],
       ['Draft reference', letter.draftRef || '—'],
       ['Signed on', letter.signedOn ? fmtDate(letter.signedOn) : '—'],
       ['Dispatch route', letter.dispatchMode || '—'],
@@ -1058,16 +1063,44 @@
     });
   }
 
+  function loadDrafters() {
+    return apiRequest('/api/drafters').then(function (result) {
+      var drafters = Array.isArray(result.drafters) ? result.drafters : [];
+      if (!drafters.length) throw new Error('No administrator accounts are available for drafting.');
+      return drafters;
+    });
+  }
+
+  function drafterField(drafters) {
+    return '<label class="field"><span>Assign drafting to</span><select name="draftAssignee" required>' +
+      '<option value="">Select an admin</option>' + drafters.map(function (username) {
+        return '<option value="' + esc(username) + '">' + esc(username) + '</option>';
+      }).join('') + '</select></label>';
+  }
+
   function startDraft(id) {
     if (!isAuthorized('admin')) return;
     var l = byId(id);
     if (!l) return;
     if (l.status !== 'received') { toast('This letter is no longer awaiting a draft.'); return; }
-    l.status = 'drafting';
-    l.stageSince = nowISO();
-    l.updatedAt = nowISO();
-    logEvent(l, 'Draft preparation started');
-    finish('Draft preparation started');
+    loadDrafters().then(function (drafters) {
+      openModal('<form class="modal-form">' +
+        '<div class="modal-head"><div><p class="modal-eyebrow">' + esc(l.refNo) + '</p><h2>Start draft preparation</h2></div>' +
+        '<button class="icon-btn" type="button" data-action="close-modal" aria-label="Close">' + iconClose() + '</button></div>' +
+        '<div class="modal-body">' + drafterField(drafters) +
+        '<p class="form-error" data-form-error hidden></p></div>' +
+        '<div class="modal-foot"><button class="btn" type="button" data-action="close-modal">Cancel</button>' +
+        '<button class="btn btn-primary" type="submit">Start draft</button></div></form>', function (fd, form) {
+          var assignee = String(fd.get('draftAssignee') || '').trim();
+          if (!assignee) { formError(form, 'Choose the admin who will prepare this draft.'); return; }
+          l.draftAssignee = assignee;
+          l.status = 'drafting';
+          l.stageSince = nowISO();
+          l.updatedAt = nowISO();
+          logEvent(l, 'Draft preparation started', { note: 'Assigned to ' + assignee });
+          finish('Draft assigned to ' + assignee);
+        });
+    }).catch(function (err) { toast(err.message || 'Drafting admins could not be loaded.'); });
   }
 
   function openSubmit(id) {
@@ -1212,12 +1245,13 @@
     if (!l) return;
     if (l.status !== 'with_officer') { toast('This letter is not with an officer.'); return; }
 
-    openModal('<form class="modal-form">' +
+    loadDrafters().then(function (drafters) { openModal('<form class="modal-form">' +
       '<div class="modal-head">' +
       '<div><p class="modal-eyebrow">' + esc(l.refNo) + '</p><h2>Return the draft for revision</h2></div>' +
       '<button class="icon-btn" type="button" data-action="close-modal" aria-label="Close">' + iconClose() + '</button>' +
       '</div>' +
       '<div class="modal-body">' +
+      drafterField(drafters) +
       '<label class="field"><span>What has to be revised?</span>' +
       '<textarea name="note" rows="3" placeholder="The officer’s observation, so the section knows what to change" required></textarea></label>' +
       '<p class="form-note">The letter goes back to “Draft preparation”. The officer and draft reference are kept for reference.</p>' +
@@ -1228,14 +1262,18 @@
       '<button class="btn btn-primary" type="submit">Return for revision</button>' +
       '</div>' +
       '</form>', function (fd, form) {
+        var assignee = String(fd.get('draftAssignee') || '').trim();
         var note = String(fd.get('note') || '').trim();
+        if (!assignee) { formError(form, 'Choose the admin who will handle the revision.'); return; }
         if (!note) { formError(form, 'Record the observation so the revision is clear.'); return; }
+        l.draftAssignee = assignee;
         l.status = 'drafting';
         l.stageSince = nowISO();
         l.updatedAt = nowISO();
-        logEvent(l, 'Returned by ' + (l.officer || 'the officer') + ' for revision', { note: note });
-        finish('Draft returned for revision');
+        logEvent(l, 'Returned by ' + (l.officer || 'the officer') + ' for revision', { note: note + ' · Assigned to ' + assignee });
+        finish('Revision assigned to ' + assignee);
       });
+    }).catch(function (err) { toast(err.message || 'Drafting admins could not be loaded.'); });
   }
 
   function reopenLetter(id) {
