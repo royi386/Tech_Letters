@@ -353,20 +353,21 @@
         name: String(raw.attachment.name || ''),
         type: String(raw.attachment.type || '')
       } : null,
+      signedPdfName: String(raw.signedPdfName || '').trim(),
       history: letters,
       createdAt: isoOrNull(raw.createdAt) || nowISO(),
       updatedAt: isoOrNull(raw.updatedAt) || nowISO()
     };
   }
 
-  function persist() {
+  function persist(extra) {
     if (!currentUser) {
       storageOk = false;
       return Promise.reject(new Error('Sign in before saving changes.'));
     }
     return apiRequest('/api/state', {
       method: 'PUT',
-      body: { settings: state.settings, letters: state.letters, revision: stateRevision }
+      body: Object.assign({ settings: state.settings, letters: state.letters, revision: stateRevision }, extra || {})
     }).then(function (result) {
       stateRevision = result.revision;
       serverInitialized = true;
@@ -580,7 +581,7 @@
      View page filters
      --------------------------------------------------------- */
 
-  var vf = { q: '', section: '', officer: '', priority: '', delayed: false };
+  var vf = { q: '', section: '', officer: '', priority: '', delayed: false, archive: false };
 
   function wireView() {
     var q = $('#f-q');
@@ -594,6 +595,8 @@
     if (priority) priority.addEventListener('change', function () { vf.priority = priority.value; renderBoard(); });
     var delayed = $('#f-delayed');
     if (delayed) delayed.addEventListener('change', function () { vf.delayed = delayed.checked; renderBoard(); });
+    var archive = $('#f-archive');
+    if (archive) archive.addEventListener('change', function () { vf.archive = archive.checked; renderBoard(); });
     var clear = $('#f-clear');
     if (clear) clear.addEventListener('click', clearViewFilters);
   }
@@ -604,11 +607,13 @@
     vf.officer = '';
     vf.priority = '';
     vf.delayed = false;
+    vf.archive = false;
     if ($('#f-q')) $('#f-q').value = '';
     if ($('#f-section')) $('#f-section').value = '';
     if ($('#f-officer')) $('#f-officer').value = '';
     if ($('#f-priority')) $('#f-priority').value = '';
     if ($('#f-delayed')) $('#f-delayed').checked = false;
+    if ($('#f-archive')) $('#f-archive').checked = false;
     renderBoard();
   }
 
@@ -703,7 +708,7 @@
     return '<button class="letter-card tone-' + l.status + '" type="button" data-action="open-letter" data-id="' + esc(l.id) + '">' +
       '<span class="card-head">' +
       '<span class="ref">' + esc(l.refNo) + '</span>' +
-      (isSent ? '<span class="age ok">' + hoursLeft(l) + ' h left</span>' : ageChip(days)) +
+      (isSent ? (isArchived(l) ? '<span class="age archived">Archived</span>' : '<span class="age ok">' + hoursLeft(l) + ' h left</span>') : ageChip(days)) +
       '</span>' +
       '<span class="subject">' + esc(l.subject) + '</span>' +
       '<span class="card-tags">' +
@@ -727,7 +732,7 @@
       return;
     }
 
-    var visible = state.letters.filter(function (l) { return !isArchived(l); });
+    var visible = vf.archive ? state.letters.slice() : state.letters.filter(function (l) { return !isArchived(l); });
     if (!visible.length) {
       region.innerHTML = '<div class="empty-state">' +
         '<h2>All clear</h2>' +
@@ -815,7 +820,7 @@
     ];
     return '<dl class="detail-grid">' + rows.map(function (row) {
       return '<dt>' + esc(row[0]) + '</dt><dd>' + esc(row[1]) + '</dd>';
-    }).join('') + '</dl>' + attachmentLinkHtml(letter);
+    }).join('') + '</dl>' + attachmentLinkHtml(letter) + signedPdfLinkHtml(letter);
   }
 
   function attachmentLinkHtml(letter) {
@@ -824,6 +829,86 @@
     if (!isAdministrator() && !ownsSection) return '';
     return '<section class="topic"><h3>Source letter</h3><a class="linkish" href="/api/letters/' +
       encodeURIComponent(letter.id) + '/attachment">Download ' + esc(letter.attachment.name) + '</a></section>';
+  }
+
+  function canDownloadSignedPdf(letter, user) {
+    user = user || currentUser;
+    return !!(user && (user.role === 'admin' ||
+      (user.role === 'section_user' && user.sectionName === letter.fromSection)));
+  }
+
+  function signedPdfLinkHtml(letter) {
+    if (letter.status !== 'dispatched' || !letter.signedPdfName) return '';
+    if (!currentUser) {
+      return '<section class="topic"><h3>Signed letter</h3>' +
+        '<button class="btn btn-primary" type="button" data-action="download-signed-pdf" data-id="' + esc(letter.id) + '">Sign in to download ' + esc(letter.signedPdfName) + '</button></section>';
+    }
+    if (!canDownloadSignedPdf(letter)) {
+      return '<section class="topic"><h3>Signed letter</h3><p>This file is available to administrators and users from ' + esc(letter.fromSection) + '.</p></section>';
+    }
+    return '<section class="topic"><h3>Signed letter</h3><a class="btn btn-primary" href="/api/letters/' +
+      encodeURIComponent(letter.id) + '/signed-pdf">Download ' + esc(letter.signedPdfName) + '</a></section>';
+  }
+
+  function downloadSignedPdf(id) {
+    var link = document.createElement('a');
+    link.href = '/api/letters/' + encodeURIComponent(id) + '/signed-pdf';
+    link.download = '';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }
+
+  function openSignedPdfLogin(id) {
+    var letter = byId(id);
+    if (!letter || !letter.signedPdfName) return;
+    openModal('<form class="modal-form" autocomplete="off">' +
+      '<div class="modal-head"><div><p class="modal-eyebrow">Signed letter</p><h2>Sign in to download</h2></div>' +
+      '<button class="icon-btn" type="button" data-action="close-modal" aria-label="Close">' + iconClose() + '</button></div>' +
+      '<div class="modal-body"><div class="form-grid">' +
+      '<label class="field span-2"><span>Username</span><input name="username" autocomplete="username" required></label>' +
+      '<label class="field span-2"><span>Password</span><input type="password" name="password" autocomplete="current-password" required></label>' +
+      '</div>' + captchaBlockHtml() +
+      '<p class="form-note">Use your administrator account or the section account assigned to this letter.</p>' +
+      '<p class="form-error" data-form-error hidden></p></div>' +
+      '<div class="modal-foot"><button class="btn" type="button" data-action="close-modal">Cancel</button>' +
+      '<button class="btn btn-primary" type="submit">Sign in and download</button></div></form>', function (fd, form) {
+        var username = String(fd.get('username') || '').trim();
+        var password = String(fd.get('password') || '');
+        var captcha = String(fd.get('captcha') || '').trim().toUpperCase();
+        var captchaIdValue = String(fd.get('captchaId') || '');
+        var submit = form.querySelector('button[type="submit"]');
+        if (submit) submit.disabled = true;
+        return apiRequest('/api/login', {
+          method: 'POST',
+          body: { username: username, password: password, captcha: captcha, captchaId: captchaIdValue }
+        }).then(function (result) {
+          if (!canDownloadSignedPdf(letter, result.user)) {
+            throw new Error('This account cannot download files from ' + letter.fromSection + '.');
+          }
+          openAccountSession(result.user);
+          return apiRequest('/api/me');
+        }).then(function (session) {
+          if (!session.user) throw new Error('Sign-in was not retained by the browser.');
+          currentUser = session.user;
+          return loadServerState();
+        }).then(function () {
+          var currentLetter = byId(id);
+          if (!currentLetter || !canDownloadSignedPdf(currentLetter)) {
+            throw new Error('This account cannot download this signed letter.');
+          }
+          closeModal();
+          downloadSignedPdf(id);
+          toast('Signed in as ' + signedInUser());
+        }).catch(function (err) {
+          formError(form, err.message || 'Sign-in failed.');
+          refreshCaptchaDisplay();
+          var passwordInput = form.querySelector('input[name="password"]');
+          if (passwordInput) passwordInput.value = '';
+          if (submit) submit.disabled = false;
+        });
+      });
+    refreshCaptchaDisplay();
   }
 
   function statusBanner(letter) {
@@ -1077,8 +1162,12 @@
     else refreshView();
   }
 
-  function finish(message) {
-    return persist().then(function () {
+  function finish(message, extra) {
+    return persist(extra).then(function () {
+      if (extra && extra.signedPdf) {
+        var savedLetter = byId(extra.signedPdf.letterId);
+        if (savedLetter) savedLetter.signedPdfName = extra.signedPdf.name;
+      }
       closeModal();
       refreshCurrentPage();
       if (message) toast(message);
@@ -1238,6 +1327,8 @@
       '<input type="datetime-local" name="dispatchedAt" value="' + esc(localDateTimeValue(Date.now())) + '" required></label>' +
       '<label class="field"><span>Dispatch reference (optional)</span>' +
       '<input name="dispatchRef" value="' + esc(l.dispatchRef || '') + '" autocomplete="off" placeholder="e-Dispatch / post ref."></label>' +
+      '<label class="field span-2"><span>Signed letter PDF (optional, up to 8 MB)</span>' +
+      '<input type="file" name="signedPdf" accept=".pdf,application/pdf"></label>' +
       '<label class="field span-2"><span>Note (optional)</span>' +
       '<textarea name="note" rows="2" placeholder="Address, acknowledgement details…"></textarea></label>' +
       '</div>' +
@@ -1254,14 +1345,34 @@
         var dispatchedMs = fromDateTimeInput(String(fd.get('dispatchedAt') || ''));
         if (dispatchedMs == null) { formError(form, 'Enter the date and time of dispatch.'); return; }
         var note = String(fd.get('note') || '').trim();
-        l.dispatchMode = mode;
-        l.dispatchRef = String(fd.get('dispatchRef') || '').trim();
-        l.dispatchedAt = new Date(dispatchedMs).toISOString();
-        l.stageSince = l.dispatchedAt;
-        l.status = 'dispatched';
-        l.updatedAt = nowISO();
-        logEvent(l, 'Dispatched via ' + mode, { note: note });
-        finish('Dispatch recorded — ' + mode);
+        var fileInput = form.querySelector('input[name="signedPdf"]');
+        var file = fileInput && fileInput.files && fileInput.files[0];
+        if (file && !/\.pdf$/i.test(file.name)) { formError(form, 'Choose a PDF file for the signed letter.'); return; }
+        if (file && file.size > 8 * 1024 * 1024) { formError(form, 'The signed PDF must be no larger than 8 MB.'); return; }
+
+        function saveDispatch(signedPdf) {
+          var currentLetter = byId(id);
+          if (!currentLetter || currentLetter.status !== 'signed') {
+            formError(form, 'This letter changed while the dispatch form was open. Reopen it and try again.');
+            return;
+          }
+          currentLetter.dispatchMode = mode;
+          currentLetter.dispatchRef = String(fd.get('dispatchRef') || '').trim();
+          currentLetter.dispatchedAt = new Date(dispatchedMs).toISOString();
+          currentLetter.stageSince = currentLetter.dispatchedAt;
+          currentLetter.status = 'dispatched';
+          currentLetter.updatedAt = nowISO();
+          var notes = [note, signedPdf ? 'Signed PDF attached: ' + signedPdf.name : ''].filter(Boolean).join(' · ');
+          logEvent(currentLetter, 'Dispatched via ' + mode, { note: notes });
+          var extra = signedPdf ? { signedPdf: { letterId: currentLetter.id, name: signedPdf.name, data: signedPdf.data } } : null;
+          finish('Dispatch recorded — ' + mode, extra);
+        }
+
+        if (!file) { saveDispatch(null); return; }
+        var reader = new FileReader();
+        reader.onload = function () { saveDispatch({ name: file.name, data: reader.result }); };
+        reader.onerror = function () { formError(form, 'The signed PDF could not be read.'); };
+        reader.readAsDataURL(file);
       });
   }
 
@@ -2419,6 +2530,9 @@
       case 'open-letter':
         openViewLetter(id);
         break;
+      case 'download-signed-pdf':
+        openSignedPdfLogin(id);
+        break;
       case 'new-letter':
         openLetterForm();
         break;
@@ -2454,6 +2568,9 @@
         break;
       case 'delete-letter':
         deleteLetter(id);
+        break;
+      case 'download-signed-pdf':
+        openSignedPdfLogin(id);
         break;
       case 'settings':
         openSettings();
