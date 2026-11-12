@@ -62,6 +62,13 @@ db.exec(`
     data BLOB NOT NULL,
     created_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS word_document_attachments (
+    letter_id TEXT PRIMARY KEY,
+    filename TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    data BLOB NOT NULL,
+    created_at TEXT NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS signed_letter_attachments (
     letter_id TEXT PRIMARY KEY,
     filename TEXT NOT NULL,
@@ -268,6 +275,27 @@ function parseAttachment(value) {
   return { filename, contentType, data };
 }
 
+function parseSignedLetter(value) {
+  const file = parseAttachment(value);
+  const extension = path.extname(file.filename).toLowerCase();
+  const expectedType = extension === '.pdf' ? 'application/pdf'
+    : extension === '.jpg' || extension === '.jpeg' ? 'image/jpeg'
+      : extension === '.png' ? 'image/png' : '';
+  if (!expectedType || file.contentType !== expectedType) {
+    throw Object.assign(new Error('Upload the signed letter as a PDF, JPG, or PNG.'), { status: 400 });
+  }
+  return file;
+}
+
+function parseWordDocument(value) {
+  const file = parseAttachment(value);
+  if (path.extname(file.filename).toLowerCase() !== '.docx' ||
+      file.contentType !== 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+    throw Object.assign(new Error('Upload the Word document as a DOCX file.'), { status: 400 });
+  }
+  return file;
+}
+
 function parseSignedPdf(value) {
   const attachment = parseAttachment(Object.assign({}, value, { type: 'application/pdf' }));
   if (!/\.pdf$/i.test(attachment.filename) || attachment.data.subarray(0, 5).toString('ascii') !== '%PDF-') {
@@ -422,6 +450,11 @@ async function handleApi(req, res, url) {
           db.prepare('DELETE FROM letter_attachments WHERE letter_id = ?').run(attachment.letter_id);
         }
       }
+      for (const attachment of db.prepare('SELECT letter_id FROM word_document_attachments').all()) {
+        if (!retainedLetterIds.has(attachment.letter_id)) {
+          db.prepare('DELETE FROM word_document_attachments WHERE letter_id = ?').run(attachment.letter_id);
+        }
+      }
       for (const attachment of db.prepare('SELECT letter_id FROM signed_letter_attachments').all()) {
         if (!retainedLetterIds.has(attachment.letter_id)) {
           db.prepare('DELETE FROM signed_letter_attachments WHERE letter_id = ?').run(attachment.letter_id);
@@ -445,7 +478,7 @@ async function handleApi(req, res, url) {
   if (req.method === 'POST' && url.pathname === '/api/submissions') {
     const user = requireSectionUser(req, res);
     if (!user) return;
-    const body = await readBody(req, 12 * 1024 * 1024);
+    const body = await readBody(req, 24 * 1024 * 1024);
     const subject = String(body.subject || '').trim();
     const fromRef = String(body.fromRef || '').trim();
     const remarks = String(body.remarks || '').trim();
@@ -455,7 +488,12 @@ async function handleApi(req, res, url) {
     if (fromRef.length > 120 || remarks.length > 1000) return sendJson(res, 400, { error: 'The reference or remarks are too long.' });
     if (!Number.isFinite(receivedTime)) return sendJson(res, 400, { error: 'Enter a valid received date.' });
     let attachment;
-    try { attachment = body.attachment ? parseAttachment(body.attachment) : null; }
+    let wordDocument;
+    try {
+      attachment = body.signedLetter ? parseSignedLetter(body.signedLetter)
+        : body.attachment ? parseAttachment(body.attachment) : null;
+      wordDocument = body.wordDocument ? parseWordDocument(body.wordDocument) : null;
+    }
     catch (err) { return sendJson(res, err.status || 400, { error: err.message }); }
 
     db.exec('BEGIN IMMEDIATE');
@@ -489,13 +527,18 @@ async function handleApi(req, res, url) {
         history: [{ at: now, action: 'Submitted by section user', status: 'received', by: user.username }],
         createdAt: now,
         updatedAt: now,
-        attachment: attachment ? { name: attachment.filename, type: attachment.contentType } : null
+        attachment: attachment ? { name: attachment.filename, type: attachment.contentType } : null,
+        wordDocument: wordDocument ? { name: wordDocument.filename, type: wordDocument.contentType } : null
       };
       letters.push(letter);
       const revision = row.revision + 1;
       if (attachment) {
         db.prepare('INSERT INTO letter_attachments (letter_id, filename, content_type, data, created_at) VALUES (?, ?, ?, ?, ?)')
           .run(letter.id, attachment.filename, attachment.contentType, attachment.data, now);
+      }
+      if (wordDocument) {
+        db.prepare('INSERT INTO word_document_attachments (letter_id, filename, content_type, data, created_at) VALUES (?, ?, ?, ?, ?)')
+          .run(letter.id, wordDocument.filename, wordDocument.contentType, wordDocument.data, now);
       }
       db.prepare('UPDATE portal_state SET letters_json = ?, initialized = 1, revision = ? WHERE id = 1')
         .run(JSON.stringify(letters), revision);
@@ -513,9 +556,10 @@ async function handleApi(req, res, url) {
     if (!user) return;
     let body = {};
     let attachment = null;
+    let wordDocument = null;
     let values = null;
     if (req.method === 'PATCH') {
-      body = await readBody(req, 12 * 1024 * 1024);
+      body = await readBody(req, 24 * 1024 * 1024);
       const subject = String(body.subject || '').trim();
       const fromRef = String(body.fromRef || '').trim();
       const remarks = String(body.remarks || '').trim();
@@ -524,7 +568,11 @@ async function handleApi(req, res, url) {
       if (!subject || subject.length > 240) return sendJson(res, 400, { error: 'Enter a subject under 240 characters.' });
       if (fromRef.length > 120 || remarks.length > 1000) return sendJson(res, 400, { error: 'The reference or remarks are too long.' });
       if (!Number.isFinite(receivedTime)) return sendJson(res, 400, { error: 'Enter a valid received date.' });
-      try { attachment = body.attachment ? parseAttachment(body.attachment) : null; }
+      try {
+        attachment = body.signedLetter ? parseSignedLetter(body.signedLetter)
+          : body.attachment ? parseAttachment(body.attachment) : null;
+        wordDocument = body.wordDocument ? parseWordDocument(body.wordDocument) : null;
+      }
       catch (err) { return sendJson(res, err.status || 400, { error: err.message }); }
       values = { subject, fromRef, remarks, receivedOn: new Date(receivedTime).toISOString() };
     }
@@ -547,6 +595,7 @@ async function handleApi(req, res, url) {
       if (req.method === 'DELETE') {
         letters.splice(index, 1);
         db.prepare('DELETE FROM letter_attachments WHERE letter_id = ?').run(letter.id);
+        db.prepare('DELETE FROM word_document_attachments WHERE letter_id = ?').run(letter.id);
         db.prepare('UPDATE portal_state SET letters_json = ?, revision = ? WHERE id = 1')
           .run(JSON.stringify(letters), revision);
         db.exec('COMMIT');
@@ -568,6 +617,14 @@ async function handleApi(req, res, url) {
           filename = excluded.filename, content_type = excluded.content_type,
           data = excluded.data, created_at = excluded.created_at`)
           .run(letter.id, attachment.filename, attachment.contentType, attachment.data, now);
+      }
+      if (wordDocument) {
+        letter.wordDocument = { name: wordDocument.filename, type: wordDocument.contentType };
+        db.prepare(`INSERT INTO word_document_attachments (letter_id, filename, content_type, data, created_at)
+          VALUES (?, ?, ?, ?, ?) ON CONFLICT(letter_id) DO UPDATE SET
+          filename = excluded.filename, content_type = excluded.content_type,
+          data = excluded.data, created_at = excluded.created_at`)
+          .run(letter.id, wordDocument.filename, wordDocument.contentType, wordDocument.data, now);
       }
       db.prepare('UPDATE portal_state SET letters_json = ?, revision = ? WHERE id = 1')
         .run(JSON.stringify(letters), revision);
@@ -600,6 +657,35 @@ async function handleApi(req, res, url) {
     res.writeHead(200, {
       'content-type': row.content_type,
       'content-disposition': `attachment; filename="source-letter"; filename*=UTF-8''${encodedFilename}`,
+      'content-length': row.data.length,
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff'
+    });
+    return res.end(row.data);
+  }
+
+  const wordDocumentMatch = url.pathname.match(/^\/api\/letters\/([a-f0-9-]+)\/word-document$/i);
+  if (wordDocumentMatch && req.method === 'GET') {
+    const user = requireLogin(req, res, false);
+    if (!user) return;
+    const letterId = wordDocumentMatch[1];
+    const row = db.prepare('SELECT filename, content_type, data FROM word_document_attachments WHERE letter_id = ?').get(letterId);
+    if (!row) return sendJson(res, 404, { error: 'Word document not found.' });
+    if (user.role !== 'admin') {
+      if (user.role !== 'section_user' || !user.sectionName) {
+        return sendJson(res, 403, { error: 'You cannot access this Word document.' });
+      }
+      const stateRow = db.prepare('SELECT letters_json FROM portal_state WHERE id = 1').get();
+      const letter = JSON.parse(stateRow.letters_json).find((item) => item.id === letterId);
+      if (!letter || letter.fromSection !== user.sectionName) {
+        return sendJson(res, 403, { error: 'You cannot access this Word document.' });
+      }
+    }
+    const encodedFilename = encodeURIComponent(row.filename.toWellFormed()).replace(/['()*]/g, (char) =>
+      '%' + char.charCodeAt(0).toString(16).toUpperCase());
+    res.writeHead(200, {
+      'content-type': row.content_type,
+      'content-disposition': `attachment; filename="word-document"; filename*=UTF-8''${encodedFilename}`,
       'content-length': row.data.length,
       'cache-control': 'no-store',
       'x-content-type-options': 'nosniff'

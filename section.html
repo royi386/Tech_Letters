@@ -63,8 +63,11 @@
           <label class="field"><span>Date received</span>
             <input type="date" name="receivedOn" required>
           </label>
-          <label class="field span-2"><span>Source letter (optional; PDF, JPG, PNG, or DOCX up to 8 MB)</span>
-            <input type="file" name="attachment" accept=".pdf,.jpg,.jpeg,.png,.docx,application/pdf,image/jpeg,image/png,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+          <label class="field span-2"><span>Signed letter (optional; PDF, JPG, or PNG up to 8 MB)</span>
+            <input type="file" name="signedLetter" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png">
+          </label>
+          <label class="field span-2"><span>Word document (optional; DOCX up to 8 MB)</span>
+            <input type="file" name="wordDocument" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
           </label>
           <label class="field span-2"><span>Remarks (optional)</span>
             <textarea name="remarks" rows="2" maxlength="1000"></textarea>
@@ -85,7 +88,7 @@
     </div>
     <div class="panel table-panel">
       <table class="data-table">
-        <thead><tr><th scope="col">Register reference</th><th scope="col">Subject</th><th scope="col">From section</th><th scope="col">Received</th><th scope="col">Status</th><th scope="col">Source letter</th><th scope="col">Actions</th></tr></thead>
+        <thead><tr><th scope="col">Register reference</th><th scope="col">Subject</th><th scope="col">From section</th><th scope="col">Received</th><th scope="col">Status</th><th scope="col">Signed letter</th><th scope="col">Word document</th><th scope="col">Actions</th></tr></thead>
         <tbody data-region="section-submissions"></tbody>
       </table>
       <div class="empty-state" data-region="section-submissions-empty" hidden>No letters are in the register yet.</div>

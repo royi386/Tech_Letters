@@ -444,6 +444,10 @@
         name: String(raw.attachment.name || ''),
         type: String(raw.attachment.type || '')
       } : null,
+      wordDocument: raw.wordDocument && typeof raw.wordDocument === 'object' ? {
+        name: String(raw.wordDocument.name || ''),
+        type: String(raw.wordDocument.type || '')
+      } : null,
       signedPdfName: String(raw.signedPdfName || '').trim(),
       history: letters,
       createdAt: isoOrNull(raw.createdAt) || nowISO(),
@@ -949,15 +953,23 @@
     ];
     return '<dl class="detail-grid">' + rows.map(function (row) {
       return '<dt>' + esc(row[0]) + '</dt><dd>' + esc(row[1]) + '</dd>';
-    }).join('') + '</dl>' + attachmentLinkHtml(letter) + signedPdfLinkHtml(letter);
+    }).join('') + '</dl>' + attachmentLinkHtml(letter) + wordDocumentLinkHtml(letter) + signedPdfLinkHtml(letter);
   }
 
   function attachmentLinkHtml(letter) {
     if (!letter.attachment || !letter.attachment.name) return '';
     var ownsSection = currentUser && currentUser.role === 'section_user' && currentUser.sectionName === letter.fromSection;
     if (!isAdministrator() && !ownsSection) return '';
-    return '<section class="topic"><h3>Source letter</h3><a class="linkish" href="/api/letters/' +
+    return '<section class="topic"><h3>Signed letter</h3><a class="linkish" href="/api/letters/' +
       encodeURIComponent(letter.id) + '/attachment">Download ' + esc(letter.attachment.name) + '</a></section>';
+  }
+
+  function wordDocumentLinkHtml(letter) {
+    if (!letter.wordDocument || !letter.wordDocument.name) return '';
+    var ownsSection = currentUser && currentUser.role === 'section_user' && currentUser.sectionName === letter.fromSection;
+    if (!isAdministrator() && !ownsSection) return '';
+    return '<section class="topic"><h3>Word document</h3><a class="linkish" href="/api/letters/' +
+      encodeURIComponent(letter.id) + '/word-document">Download ' + esc(letter.wordDocument.name) + '</a></section>';
   }
 
   function canDownloadSignedPdf(letter, user) {
@@ -1862,17 +1874,24 @@
         ? '<button class="btn btn-tiny" type="button" data-action="edit-submission" data-id="' + esc(letter.id) + '">Edit</button> ' +
           '<button class="btn btn-tiny btn-danger" type="button" data-action="delete-submission" data-id="' + esc(letter.id) + '">Delete</button>'
         : (letter.status === 'received' ? '—' : 'Technical Section handling');
-      var sourceLetter = letter.attachment
+      var ownsSection = letter.fromSection === currentUser.sectionName;
+      var signedLetter = letter.attachment
         ? (letter.fromSection === currentUser.sectionName
           ? '<a class="linkish" href="/api/letters/' + encodeURIComponent(letter.id) + '/attachment">' + esc(letter.attachment.name) + '</a>'
           : esc(letter.attachment.name) + ' (restricted)')
+        : '—';
+      var wordDocument = letter.wordDocument
+        ? (ownsSection
+          ? '<a class="linkish" href="/api/letters/' + encodeURIComponent(letter.id) + '/word-document">' + esc(letter.wordDocument.name) + '</a>'
+          : esc(letter.wordDocument.name) + ' (restricted)')
         : '—';
       return '<tr><td class="cell-letter"><strong>' + esc(letter.refNo) + '</strong></td>' +
         '<td>' + esc(letter.subject) + '</td>' +
         '<td>' + esc(letter.fromSection) + '</td>' +
         '<td>' + fmtDate(letter.receivedOn) + '</td>' +
         '<td><span class="pill s-' + esc(letter.status) + '">' + esc(STATUS[letter.status].label) + '</span></td>' +
-        '<td>' + sourceLetter + '</td>' +
+        '<td>' + signedLetter + '</td>' +
+        '<td>' + wordDocument + '</td>' +
         '<td class="account-actions">' + actions + '</td></tr>';
     }).join('');
     if (empty) empty.hidden = letters.length > 0;
@@ -1899,10 +1918,23 @@
     if (!isAuthorized('section')) return Promise.resolve();
     if (editingId && !canEditSectionSubmission(byId(editingId))) return Promise.resolve();
     var fd = new FormData(form);
-    var file = fd.get('attachment');
+    var signedLetterFile = fd.get('signedLetter');
+    var wordDocumentFile = fd.get('wordDocument');
     var receivedMs = fromDateInput(String(fd.get('receivedOn') || ''));
-    if (file && file.name && file.size > 8 * 1024 * 1024) {
-      formError(form, 'The source letter must be no larger than 8 MB.');
+    if (signedLetterFile && signedLetterFile.name && signedLetterFile.size > 8 * 1024 * 1024) {
+      formError(form, 'The signed letter must be no larger than 8 MB.');
+      return Promise.resolve();
+    }
+    if (wordDocumentFile && wordDocumentFile.name && wordDocumentFile.size > 8 * 1024 * 1024) {
+      formError(form, 'The Word document must be no larger than 8 MB.');
+      return Promise.resolve();
+    }
+    if (signedLetterFile && signedLetterFile.name && !/\.(pdf|jpe?g|png)$/i.test(signedLetterFile.name)) {
+      formError(form, 'Choose a PDF, JPG, or PNG file for the signed letter.');
+      return Promise.resolve();
+    }
+    if (wordDocumentFile && wordDocumentFile.name && !/\.docx$/i.test(wordDocumentFile.name)) {
+      formError(form, 'Choose a DOCX file for the Word document.');
       return Promise.resolve();
     }
     if (receivedMs == null) {
@@ -1937,20 +1969,36 @@
         if (submit) submit.disabled = false;
       });
     }
-    if (!file || !file.name) {
-      sendSubmission();
-      return;
+    function readUpload(file, label) {
+      if (!file || !file.name) return Promise.resolve(null);
+      return new Promise(function (resolve, reject) {
+        var reader = new FileReader();
+        reader.onload = function () {
+          var extension = file.name.toLowerCase().split('.').pop();
+          var types = {
+            pdf: 'application/pdf',
+            jpg: 'image/jpeg',
+            jpeg: 'image/jpeg',
+            png: 'image/png',
+            docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+          };
+          resolve({ name: file.name, type: types[extension] || file.type, data: reader.result });
+        };
+        reader.onerror = function () { reject(new Error(label + ' could not be read.')); };
+        reader.readAsDataURL(file);
+      });
     }
-    var reader = new FileReader();
-    reader.onload = function () {
-      payload.attachment = { name: file.name, type: file.type, data: reader.result };
+    Promise.all([
+      readUpload(signedLetterFile, 'The signed letter'),
+      readUpload(wordDocumentFile, 'The Word document')
+    ]).then(function (files) {
+      if (files[0]) payload.signedLetter = files[0];
+      if (files[1]) payload.wordDocument = files[1];
       sendSubmission();
-    };
-    reader.onerror = function () {
-      formError(form, 'The source letter could not be read.');
+    }).catch(function (err) {
+      formError(form, err.message || 'The selected files could not be read.');
       if (submit) submit.disabled = false;
-    };
-    reader.readAsDataURL(file);
+    });
   }
 
   function openSectionSubmissionEdit(id) {
@@ -1963,10 +2011,14 @@
       '<label class="field span-2"><span>Subject</span><input name="subject" value="' + esc(letter.subject) + '" maxlength="240" required></label>' +
       '<label class="field"><span>Your letter number / date</span><input name="fromRef" value="' + esc(letter.fromRef) + '" maxlength="120"></label>' +
       '<label class="field"><span>Date received</span><input type="date" name="receivedOn" value="' + esc(dateInputValue(letter.receivedOn)) + '" required></label>' +
-      '<label class="field span-2"><span>Replace source letter (optional; PDF, JPG, PNG, or DOCX up to 8 MB)</span>' +
-      '<input type="file" name="attachment" accept=".pdf,.jpg,.jpeg,.png,.docx,application/pdf,image/jpeg,image/png,application/vnd.openxmlformats-officedocument.wordprocessingml.document"></label>' +
+      '<label class="field span-2"><span>Replace signed letter (optional; PDF, JPG, or PNG up to 8 MB)</span>' +
+      '<input type="file" name="signedLetter" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png"></label>' +
+      '<label class="field span-2"><span>Replace Word document (optional; DOCX up to 8 MB)</span>' +
+      '<input type="file" name="wordDocument" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"></label>' +
       '<label class="field span-2"><span>Remarks (optional)</span><textarea name="remarks" rows="2" maxlength="1000">' + esc(letter.remarks) + '</textarea></label>' +
-      '</div>' + (letter.attachment ? '<p class="form-note">Current source: <a class="linkish" href="/api/letters/' + encodeURIComponent(letter.id) + '/attachment">' + esc(letter.attachment.name) + '</a></p>' : '') +
+      '</div>' +
+      (letter.attachment ? '<p class="form-note">Current signed letter: <a class="linkish" href="/api/letters/' + encodeURIComponent(letter.id) + '/attachment">' + esc(letter.attachment.name) + '</a></p>' : '') +
+      (letter.wordDocument ? '<p class="form-note">Current Word document: <a class="linkish" href="/api/letters/' + encodeURIComponent(letter.id) + '/word-document">' + esc(letter.wordDocument.name) + '</a></p>' : '') +
       '<p class="form-error" data-form-error hidden></p></div>' +
       '<div class="modal-foot"><button class="btn" type="button" data-action="close-modal">Cancel</button>' +
       '<button class="btn btn-primary" type="submit">Save changes</button></div></form>',

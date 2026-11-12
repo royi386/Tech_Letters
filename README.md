@@ -30,7 +30,8 @@ immediately after signing in from Management → Accounts. The Main admin can cr
 accounts or section-user accounts, each bound to one active section. Section users sign in at
 `/section.html`, submit letters into the admin register at **Received**, and can view all letters in
 the register. A section user can submit, edit, or delete only their own letters for their assigned
-section. Uploads accept PDF, JPG, PNG, or DOCX files up to 8 MB.
+section. Each submission can optionally include a signed letter (PDF, JPG, or PNG) and a Word
+document (DOCX), up to 8 MB per file.
 
 For other computers, set `HOST=0.0.0.0` and `COOKIE_SECURE=1`, then place the server behind a
 trusted HTTPS reverse proxy. Do not send passwords over plain HTTP on a shared network.
