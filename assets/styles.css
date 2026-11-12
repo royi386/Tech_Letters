@@ -595,6 +595,8 @@ dialog.modal[open]{display:flex;flex-direction:column;animation:pop .16s ease-ou
 .account-note{margin-top:10px}
 .section-submit-panel{padding:18px}
 .section-submit-form{display:flex;flex-direction:column;gap:14px}
+.section-register-search{padding:14px 18px;margin-bottom:12px}
+.section-register-search .field{max-width:520px}
 
 /* ---------------- Admin ---------------- */
 

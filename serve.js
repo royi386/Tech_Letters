@@ -401,7 +401,7 @@ async function handleApi(req, res, url) {
           refPrefix: settings.refPrefix,
           sections: [user.sectionName]
         },
-        letters,
+        letters: withSignedPdfNames(letters),
         initialized: !!row.initialized,
         revision: row.revision
       });
@@ -642,15 +642,8 @@ async function handleApi(req, res, url) {
     if (!user) return;
     const row = db.prepare('SELECT filename, content_type, data FROM letter_attachments WHERE letter_id = ?').get(attachmentMatch[1]);
     if (!row) return sendJson(res, 404, { error: 'Source letter not found.' });
-    if (user.role !== 'admin') {
-      if (user.role !== 'section_user' || !user.sectionName) {
-        return sendJson(res, 403, { error: 'You cannot access this source letter.' });
-      }
-      const stateRow = db.prepare('SELECT letters_json FROM portal_state WHERE id = 1').get();
-      const letter = JSON.parse(stateRow.letters_json).find((item) => item.id === attachmentMatch[1]);
-      if (!letter || letter.fromSection !== user.sectionName) {
-        return sendJson(res, 403, { error: 'You cannot access this source letter.' });
-      }
+    if (user.role !== 'admin' && !(user.role === 'section_user' && user.sectionName)) {
+      return sendJson(res, 403, { error: 'You cannot access this source letter.' });
     }
     const encodedFilename = encodeURIComponent(row.filename.toWellFormed()).replace(/['()*]/g, (char) =>
       '%' + char.charCodeAt(0).toString(16).toUpperCase());
@@ -671,15 +664,8 @@ async function handleApi(req, res, url) {
     const letterId = wordDocumentMatch[1];
     const row = db.prepare('SELECT filename, content_type, data FROM word_document_attachments WHERE letter_id = ?').get(letterId);
     if (!row) return sendJson(res, 404, { error: 'Word document not found.' });
-    if (user.role !== 'admin') {
-      if (user.role !== 'section_user' || !user.sectionName) {
-        return sendJson(res, 403, { error: 'You cannot access this Word document.' });
-      }
-      const stateRow = db.prepare('SELECT letters_json FROM portal_state WHERE id = 1').get();
-      const letter = JSON.parse(stateRow.letters_json).find((item) => item.id === letterId);
-      if (!letter || letter.fromSection !== user.sectionName) {
-        return sendJson(res, 403, { error: 'You cannot access this Word document.' });
-      }
+    if (user.role !== 'admin' && !(user.role === 'section_user' && user.sectionName)) {
+      return sendJson(res, 403, { error: 'You cannot access this Word document.' });
     }
     const encodedFilename = encodeURIComponent(row.filename.toWellFormed()).replace(/['()*]/g, (char) =>
       '%' + char.charCodeAt(0).toString(16).toUpperCase());
@@ -700,7 +686,7 @@ async function handleApi(req, res, url) {
     const stateRow = db.prepare('SELECT letters_json FROM portal_state WHERE id = 1').get();
     const letter = JSON.parse(stateRow.letters_json).find((item) => item.id === signedPdfMatch[1]);
     if (!letter || letter.status !== 'dispatched') return sendJson(res, 404, { error: 'Signed letter not found.' });
-    if (user.role !== 'admin' && !(user.role === 'section_user' && user.sectionName === letter.fromSection)) {
+    if (user.role !== 'admin' && !(user.role === 'section_user' && user.sectionName)) {
       return sendJson(res, 403, { error: 'You cannot access this signed letter.' });
     }
     const row = db.prepare('SELECT filename, data FROM signed_letter_attachments WHERE letter_id = ?').get(signedPdfMatch[1]);

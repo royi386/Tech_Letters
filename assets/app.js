@@ -897,7 +897,8 @@
       return;
     }
 
-    var visible = vf.archive ? state.letters.slice() : state.letters.filter(function (l) { return !isArchived(l); });
+    var includeArchive = vf.archive || !!String(vf.q || '').trim();
+    var visible = includeArchive ? state.letters.slice() : state.letters.filter(function (l) { return !isArchived(l); });
     if (!visible.length) {
       region.innerHTML = '<div class="empty-state">' +
         '<h2>All clear</h2>' +
@@ -992,36 +993,37 @@
 
   function attachmentLinkHtml(letter) {
     if (!letter.attachment || !letter.attachment.name) return '';
-    var ownsSection = currentUser && currentUser.role === 'section_user' && currentUser.sectionName === letter.fromSection;
-    if (!isAdministrator() && !ownsSection) return '';
+    if (!canDownloadLetterFiles()) return '';
     return '<section class="topic"><h3>Signed letter</h3><a class="linkish" href="/api/letters/' +
       encodeURIComponent(letter.id) + '/attachment">Download ' + esc(letter.attachment.name) + '</a></section>';
   }
 
   function wordDocumentLinkHtml(letter) {
     if (!letter.wordDocument || !letter.wordDocument.name) return '';
-    var ownsSection = currentUser && currentUser.role === 'section_user' && currentUser.sectionName === letter.fromSection;
-    if (!isAdministrator() && !ownsSection) return '';
+    if (!canDownloadLetterFiles()) return '';
     return '<section class="topic"><h3>Word document</h3><a class="linkish" href="/api/letters/' +
       encodeURIComponent(letter.id) + '/word-document">Download ' + esc(letter.wordDocument.name) + '</a></section>';
   }
 
-  function canDownloadSignedPdf(letter, user) {
+  function canDownloadLetterFiles(user) {
     user = user || currentUser;
-    return !!(user && (user.role === 'admin' ||
-      (user.role === 'section_user' && user.sectionName === letter.fromSection)));
+    return !!(user && (user.role === 'admin' || (user.role === 'section_user' && user.sectionName)));
+  }
+
+  function canDownloadSignedPdf(letter, user) {
+    return !!(letter && letter.status === 'dispatched' && canDownloadLetterFiles(user));
   }
 
   function signedPdfLinkHtml(letter) {
     if (letter.status !== 'dispatched' || !letter.signedPdfName) return '';
     if (!currentUser) {
-      return '<section class="topic"><h3>Signed letter</h3>' +
+      return '<section class="topic"><h3>Final signed PDF</h3>' +
         '<button class="btn btn-primary" type="button" data-action="download-signed-pdf" data-id="' + esc(letter.id) + '">Sign in to download ' + esc(letter.signedPdfName) + '</button></section>';
     }
     if (!canDownloadSignedPdf(letter)) {
-      return '<section class="topic"><h3>Signed letter</h3><p>This file is available to administrators and users from ' + esc(letter.fromSection) + '.</p></section>';
+      return '<section class="topic"><h3>Final signed PDF</h3><p>Sign in with an administrator or section account to download this file.</p></section>';
     }
-    return '<section class="topic"><h3>Signed letter</h3><a class="btn btn-primary" href="/api/letters/' +
+    return '<section class="topic"><h3>Final signed PDF</h3><a class="btn btn-primary" href="/api/letters/' +
       encodeURIComponent(letter.id) + '/signed-pdf">Download ' + esc(letter.signedPdfName) + '</a></section>';
   }
 
@@ -1038,13 +1040,13 @@
     var letter = byId(id);
     if (!letter || !letter.signedPdfName) return;
     openModal('<form class="modal-form" autocomplete="off">' +
-      '<div class="modal-head"><div><p class="modal-eyebrow">Signed letter</p><h2>Sign in to download</h2></div>' +
+      '<div class="modal-head"><div><p class="modal-eyebrow">Final signed PDF</p><h2>Sign in to download</h2></div>' +
       '<button class="icon-btn" type="button" data-action="close-modal" aria-label="Close">' + iconClose() + '</button></div>' +
       '<div class="modal-body"><div class="form-grid">' +
       '<label class="field span-2"><span>Username</span><input name="username" autocomplete="username" required></label>' +
       '<label class="field span-2"><span>Password</span><input type="password" name="password" autocomplete="current-password" required></label>' +
       '</div>' + captchaBlockHtml() +
-      '<p class="form-note">Use your administrator account or the section account assigned to this letter.</p>' +
+      '<p class="form-note">Use any administrator or section account.</p>' +
       '<p class="form-error" data-form-error hidden></p></div>' +
       '<div class="modal-foot"><button class="btn" type="button" data-action="close-modal">Cancel</button>' +
       '<button class="btn btn-primary" type="submit">Sign in and download</button></div></form>', function (fd, form) {
@@ -1059,7 +1061,7 @@
           body: { username: username, password: password, captcha: captcha, captchaId: captchaIdValue }
         }).then(function (result) {
           if (!canDownloadSignedPdf(letter, result.user)) {
-            throw new Error('This account cannot download files from ' + letter.fromSection + '.');
+            throw new Error('Sign in with an administrator or section account to download this file.');
           }
           openAccountSession(result.user);
           return apiRequest('/api/me');
@@ -1070,7 +1072,7 @@
         }).then(function () {
           var currentLetter = byId(id);
           if (!currentLetter || !canDownloadSignedPdf(currentLetter)) {
-            throw new Error('This account cannot download this signed letter.');
+            throw new Error('Sign in with an administrator or section account to download this file.');
           }
           closeModal();
           downloadSignedPdf(id);
@@ -1964,25 +1966,39 @@
     var count = $('[data-region="section-submission-count"]');
     var empty = $('[data-region="section-submissions-empty"]');
     if (!rows) return;
-    var letters = state.letters.slice().sort(function (a, b) {
+    var allLetters = state.letters.slice().sort(function (a, b) {
       return (parseISO(b.createdAt) || 0) - (parseISO(a.createdAt) || 0);
     });
-    if (count) count.textContent = letters.length + ' letter' + (letters.length === 1 ? '' : 's') + ' in the register';
+    var search = $('#section-letter-search');
+    var query = search ? String(search.value || '').trim().toLowerCase() : '';
+    var letters = query ? allLetters.filter(function (letter) {
+      var haystack = [
+        letter.refNo, letter.subject, letter.fromSection, letter.fromRef,
+        letter.officer, letter.draftAssignee, letter.remarks, letter.dispatchMode, letter.dispatchRef,
+        letter.attachment ? letter.attachment.name : '',
+        letter.wordDocument ? letter.wordDocument.name : '',
+        letter.signedPdfName
+      ].join(' ').toLowerCase();
+      return haystack.indexOf(query) >= 0;
+    }) : allLetters;
+    if (count) {
+      count.textContent = query
+        ? letters.length + ' matching of ' + allLetters.length + ' letters in the register'
+        : allLetters.length + ' letters in the register, including archived dispatches';
+    }
     rows.innerHTML = letters.map(function (letter) {
       var actions = canEditSectionSubmission(letter)
         ? '<button class="btn btn-tiny" type="button" data-action="edit-submission" data-id="' + esc(letter.id) + '">Edit</button> ' +
           '<button class="btn btn-tiny btn-danger" type="button" data-action="delete-submission" data-id="' + esc(letter.id) + '">Delete</button>'
         : (letter.status === 'received' ? '—' : 'Technical Section handling');
-      var ownsSection = letter.fromSection === currentUser.sectionName;
       var signedLetter = letter.attachment
-        ? (letter.fromSection === currentUser.sectionName
-          ? '<a class="linkish" href="/api/letters/' + encodeURIComponent(letter.id) + '/attachment">' + esc(letter.attachment.name) + '</a>'
-          : esc(letter.attachment.name) + ' (restricted)')
+        ? '<a class="linkish" href="/api/letters/' + encodeURIComponent(letter.id) + '/attachment">' + esc(letter.attachment.name) + '</a>'
         : '—';
       var wordDocument = letter.wordDocument
-        ? (ownsSection
-          ? '<a class="linkish" href="/api/letters/' + encodeURIComponent(letter.id) + '/word-document">' + esc(letter.wordDocument.name) + '</a>'
-          : esc(letter.wordDocument.name) + ' (restricted)')
+        ? '<a class="linkish" href="/api/letters/' + encodeURIComponent(letter.id) + '/word-document">' + esc(letter.wordDocument.name) + '</a>'
+        : '—';
+      var finalSignedPdf = letter.signedPdfName && letter.status === 'dispatched'
+        ? '<a class="linkish" href="/api/letters/' + encodeURIComponent(letter.id) + '/signed-pdf">' + esc(letter.signedPdfName) + '</a>'
         : '—';
       return '<tr><td class="cell-letter"><strong>' + esc(letter.refNo) + '</strong></td>' +
         '<td>' + esc(letter.subject) + '</td>' +
@@ -1991,9 +2007,13 @@
         '<td><span class="pill s-' + esc(letter.status) + '">' + esc(STATUS[letter.status].label) + '</span></td>' +
         '<td>' + signedLetter + '</td>' +
         '<td>' + wordDocument + '</td>' +
+        '<td>' + finalSignedPdf + '</td>' +
         '<td class="account-actions">' + actions + '</td></tr>';
     }).join('');
-    if (empty) empty.hidden = letters.length > 0;
+    if (empty) {
+      empty.hidden = letters.length > 0;
+      empty.textContent = query ? 'No letters match your search.' : 'No letters are in the register yet.';
+    }
   }
 
   function canEditSectionSubmission(letter) {
@@ -2005,6 +2025,8 @@
   }
 
   function wireSectionPage() {
+    var search = $('#section-letter-search');
+    if (search) search.addEventListener('input', renderSectionSubmissions);
     var form = $('#section-submit-form');
     if (!form) return;
     form.addEventListener('submit', function (ev) {

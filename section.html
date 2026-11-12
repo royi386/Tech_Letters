@@ -86,9 +86,14 @@
         <p class="section-sub" data-region="section-submission-count"></p>
       </div>
     </div>
+    <div class="panel section-register-search">
+      <label class="field"><span>Search letters from all sections</span>
+        <input type="search" id="section-letter-search" autocomplete="off" placeholder="Reference, subject, section, officer or filename">
+      </label>
+    </div>
     <div class="panel table-panel">
       <table class="data-table">
-        <thead><tr><th scope="col">Register reference</th><th scope="col">Subject</th><th scope="col">From section</th><th scope="col">Received</th><th scope="col">Status</th><th scope="col">Signed letter</th><th scope="col">Word document</th><th scope="col">Actions</th></tr></thead>
+        <thead><tr><th scope="col">Register reference</th><th scope="col">Subject</th><th scope="col">From section</th><th scope="col">Received</th><th scope="col">Status</th><th scope="col">Signed letter</th><th scope="col">Word document</th><th scope="col">Final signed PDF</th><th scope="col">Actions</th></tr></thead>
         <tbody data-region="section-submissions"></tbody>
       </table>
       <div class="empty-state" data-region="section-submissions-empty" hidden>No letters are in the register yet.</div>

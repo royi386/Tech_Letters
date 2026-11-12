@@ -29,9 +29,10 @@ The initial Main admin login is username `roy`, password `asdfasdf`. Change this
 immediately after signing in from Management → Accounts. The Main admin can create administrator
 accounts or section-user accounts, each bound to one active section. Section users sign in at
 `/section.html`, submit letters into the admin register at **Received**, and can view all letters in
-the register. A section user can submit, edit, or delete only their own letters for their assigned
-section. Each submission can optionally include a signed letter (PDF, JPG, or PNG) and a Word
-document (DOCX), up to 8 MB per file.
+the register. They can search the full register, including dispatched letters archived from the
+status board, and download files attached to letters from any section. A section user can submit,
+edit, or delete only their own letters for their assigned section. Each submission can optionally
+include a signed letter (PDF, JPG, or PNG) and a Word document (DOCX), up to 8 MB per file.
 
 For other computers, set `HOST=0.0.0.0` and `COOKIE_SECURE=1`, then place the server behind a
 trusted HTTPS reverse proxy. Do not send passwords over plain HTTP on a shared network.
@@ -96,7 +97,8 @@ stay in the register, and the board filters still offer every section that appea
 - **Record dispatch** asks for the route, the date and time, and an optional dispatch reference.
 - **48-hour rule:** a dispatched letter leaves the status board exactly 48 hours after the
   dispatch date and time entered. It is not deleted — the admin console keeps it, and ticking
-  **Show archive (over 48 hrs)** shows it there. **Reopen (undo dispatch)** corrects a mistake.
+  **Show archive (over 48 hrs)** shows it there. Searching the board also includes archived
+  dispatches. **Reopen (undo dispatch)** corrects a mistake.
 
 Workflow actions are appended to the letter's movement history with the date, time and the
 "Recorded by" name from Settings. Editing letter details does not add a movement-history event.
