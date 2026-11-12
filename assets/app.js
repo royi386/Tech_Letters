@@ -1357,7 +1357,6 @@
         letter.dispatchedAt = dispatchedFallbackMs == null ? null : new Date(dispatchedFallbackMs).toISOString();
       }
       letter.updatedAt = nowISO();
-      logEvent(letter, 'Letter details updated');
       return finish('Letter details updated');
     }
 

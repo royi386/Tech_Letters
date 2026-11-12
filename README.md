@@ -98,8 +98,8 @@ stay in the register, and the board filters still offer every section that appea
   dispatch date and time entered. It is not deleted — the admin console keeps it, and ticking
   **Show archive (over 48 hrs)** shows it there. **Reopen (undo dispatch)** corrects a mistake.
 
-Every action is appended to the letter's movement history with the date, time and the
-"Recorded by" name from Settings.
+Workflow actions are appended to the letter's movement history with the date, time and the
+"Recorded by" name from Settings. Editing letter details does not add a movement-history event.
 Administrators can use **Edit details** to adjust the received date and time, current-stage
 timer, and individual movement timestamps. Signature and dispatch event edits also update
 their corresponding register dates.
