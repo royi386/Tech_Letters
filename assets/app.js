@@ -108,6 +108,9 @@
   var managedAccounts = [];
   var serverInitialized = false;
   var stateRevision = 0;
+  var serverSnapshot = null;
+  var persistQueue = Promise.resolve();
+  var pendingPersistCount = 0;
   var legacyState = null;
   var stateRequestPending = false;
   var modalEl = null;
@@ -262,25 +265,113 @@
     }
     return fetch(url, Object.assign({ credentials: 'same-origin', headers: headers }, options)).then(function (response) {
       return response.json().catch(function () { return {}; }).then(function (body) {
-        if (!response.ok) throw new Error(body.error || 'The server request failed.');
+        if (!response.ok) {
+          var error = new Error(body.error || 'The server request failed.');
+          error.status = response.status;
+          throw error;
+        }
         return body;
       });
     });
+  }
+
+  function cloneValue(value) {
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  function snapshotState(value) {
+    return {
+      settings: cloneValue(value.settings),
+      letters: value.letters.map(function (letter) {
+        var copy = cloneValue(letter);
+        delete copy.signedPdfName;
+        return copy;
+      })
+    };
+  }
+
+  function sameValue(a, b) {
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
+
+  function rebaseState(base, local, remote) {
+    if (!base) return null;
+    var settings = {};
+    var settingNames = new Set(Object.keys(base.settings).concat(
+      Object.keys(local.settings), Object.keys(remote.settings)
+    ));
+    var conflict = false;
+    settingNames.forEach(function (name) {
+      var localChanged = !sameValue(local.settings[name], base.settings[name]);
+      var remoteChanged = !sameValue(remote.settings[name], base.settings[name]);
+      if (localChanged && remoteChanged && !sameValue(local.settings[name], remote.settings[name])) {
+        conflict = true;
+      } else if (localChanged) {
+        settings[name] = local.settings[name];
+      } else if (Object.prototype.hasOwnProperty.call(remote.settings, name)) {
+        settings[name] = remote.settings[name];
+      }
+    });
+
+    var baseById = new Map(base.letters.map(function (letter) { return [letter.id, letter]; }));
+    var localById = new Map(local.letters.map(function (letter) { return [letter.id, letter]; }));
+    var remoteById = new Map(remote.letters.map(function (letter) { return [letter.id, letter]; }));
+    var mergedById = new Map();
+
+    base.letters.forEach(function (baseLetter) {
+      var localLetter = localById.get(baseLetter.id);
+      var remoteLetter = remoteById.get(baseLetter.id);
+      if (!localLetter) {
+        if (remoteLetter && !sameValue(remoteLetter, baseLetter)) conflict = true;
+        return;
+      }
+      if (!remoteLetter) {
+        if (!sameValue(localLetter, baseLetter)) conflict = true;
+        return;
+      }
+      var localChanged = !sameValue(localLetter, baseLetter);
+      var remoteChanged = !sameValue(remoteLetter, baseLetter);
+      if (localChanged && remoteChanged && !sameValue(localLetter, remoteLetter)) {
+        conflict = true;
+      }
+      mergedById.set(baseLetter.id, localChanged ? localLetter : remoteLetter);
+    });
+
+    remote.letters.forEach(function (letter) {
+      if (baseById.has(letter.id)) return;
+      var localLetter = localById.get(letter.id);
+      if (localLetter && !sameValue(localLetter, letter)) conflict = true;
+      mergedById.set(letter.id, localLetter || letter);
+    });
+    local.letters.forEach(function (letter) {
+      if (!baseById.has(letter.id) && !remoteById.has(letter.id)) mergedById.set(letter.id, letter);
+    });
+
+    if (conflict) return null;
+    var letters = remote.letters.map(function (letter) { return mergedById.get(letter.id); })
+      .filter(Boolean);
+    local.letters.forEach(function (letter) {
+      if (!remoteById.has(letter.id) && !baseById.has(letter.id)) letters.push(mergedById.get(letter.id));
+    });
+    return { settings: settings, letters: letters };
   }
 
   function applyServerState(data) {
     state = normalize({ settings: data.settings, letters: data.letters, auth: {} });
     serverInitialized = !!data.initialized;
     stateRevision = Number(data.revision) || 0;
+    serverSnapshot = snapshotState(state);
     storageOk = true;
     syncShell();
     refreshCurrentPage();
   }
 
   function loadServerState() {
-    if (stateRequestPending) return Promise.resolve();
+    if (stateRequestPending || pendingPersistCount) return Promise.resolve();
     stateRequestPending = true;
-    return apiRequest('/api/state').then(applyServerState).catch(function () {
+    return apiRequest('/api/state').then(function (data) {
+      if (!pendingPersistCount && Number(data.revision) >= stateRevision) applyServerState(data);
+    }).catch(function () {
       storageOk = false;
     }).then(function () { stateRequestPending = false; });
   }
@@ -365,18 +456,56 @@
       storageOk = false;
       return Promise.reject(new Error('Sign in before saving changes.'));
     }
-    return apiRequest('/api/state', {
-      method: 'PUT',
-      body: Object.assign({ settings: state.settings, letters: state.letters, revision: stateRevision }, extra || {})
-    }).then(function (result) {
-      stateRevision = result.revision;
-      serverInitialized = true;
-      storageOk = true;
-      return true;
+    pendingPersistCount++;
+    var save = persistQueue.catch(function () {}).then(function () {
+      function send(retries) {
+        var submittedState = snapshotState(state);
+        var base = serverSnapshot;
+        return apiRequest('/api/state', {
+          method: 'PUT',
+          body: Object.assign({
+            settings: submittedState.settings,
+            letters: submittedState.letters,
+            revision: stateRevision
+          }, extra || {})
+        }).then(function (result) {
+          stateRevision = result.revision;
+          serverSnapshot = submittedState;
+          serverInitialized = true;
+          storageOk = true;
+          return true;
+        }).catch(function (err) {
+          if (err.status !== 409 || retries <= 0) throw err;
+          return apiRequest('/api/state').then(function (data) {
+            var remoteState = normalize({ settings: data.settings, letters: data.letters });
+            var remote = snapshotState(remoteState);
+            var merged = rebaseState(base, snapshotState(state), remote);
+            if (!merged) {
+              applyServerState(data);
+              var conflict = new Error('The same letter or setting changed in another session. The latest register has been loaded; review and try again.');
+              conflict.status = 409;
+              throw conflict;
+            }
+            state = normalize(merged);
+            stateRevision = Number(data.revision) || 0;
+            serverSnapshot = remote;
+            return send(retries - 1);
+          });
+        });
+      }
+      return send(2);
     }).catch(function (err) {
-      storageOk = false;
+      storageOk = err.status === 409;
+      throw err;
+    }).then(function (result) {
+      pendingPersistCount--;
+      return result;
+    }, function (err) {
+      pendingPersistCount--;
       throw err;
     });
+    persistQueue = save.then(function () {}, function () {});
+    return save;
   }
 
   function byId(id) {
@@ -1117,8 +1246,7 @@
       letter.receivedOn = new Date(receivedMs).toISOString();
       letter.updatedAt = nowISO();
       logEvent(letter, 'Letter details updated');
-      finish('Letter details updated');
-      return;
+      return finish('Letter details updated');
     }
 
     var created = new Date(receivedMs).toISOString();
@@ -1169,6 +1297,7 @@
         if (savedLetter) savedLetter.signedPdfName = extra.signedPdf.name;
       }
       closeModal();
+      syncShell();
       refreshCurrentPage();
       if (message) toast(message);
       return true;
@@ -1199,6 +1328,11 @@
     if (!l) return;
     if (l.status !== 'received') { toast('This letter is no longer awaiting a draft.'); return; }
     loadDrafters().then(function (drafters) {
+      l = byId(id);
+      if (!l || l.status !== 'received') {
+        toast('This letter changed while the drafting admins were loading. Reload the letter and try again.');
+        return;
+      }
       openModal('<form class="modal-form">' +
         '<div class="modal-head"><div><p class="modal-eyebrow">' + esc(l.refNo) + '</p><h2>Start draft preparation</h2></div>' +
         '<button class="icon-btn" type="button" data-action="close-modal" aria-label="Close">' + iconClose() + '</button></div>' +
@@ -1208,12 +1342,17 @@
         '<button class="btn btn-primary" type="submit">Start draft</button></div></form>', function (fd, form) {
           var assignee = String(fd.get('draftAssignee') || '').trim();
           if (!assignee) { formError(form, 'Choose the admin who will prepare this draft.'); return; }
-          l.draftAssignee = assignee;
-          l.status = 'drafting';
-          l.stageSince = nowISO();
-          l.updatedAt = nowISO();
-          logEvent(l, 'Draft preparation started', { note: 'Assigned to ' + assignee });
-          finish('Draft assigned to ' + assignee);
+          var currentLetter = byId(id);
+          if (!currentLetter || currentLetter.status !== 'received') {
+            formError(form, 'This letter changed while the form was open. Reopen it and try again.');
+            return;
+          }
+          currentLetter.draftAssignee = assignee;
+          currentLetter.status = 'drafting';
+          currentLetter.stageSince = nowISO();
+          currentLetter.updatedAt = nowISO();
+          logEvent(currentLetter, 'Draft preparation started', { note: 'Assigned to ' + assignee });
+          return finish('Draft assigned to ' + assignee);
         });
     }).catch(function (err) { toast(err.message || 'Drafting admins could not be loaded.'); });
   }
@@ -1250,17 +1389,22 @@
       '</form>', function (fd, form) {
         var officer = String(fd.get('officer') || '').trim();
         if (!officer) { formError(form, 'Choose the officer who will sign the draft.'); return; }
+        var currentLetter = byId(id);
+        if (!currentLetter || currentLetter.status !== 'drafting') {
+          formError(form, 'This letter changed while the form was open. Reopen it and try again.');
+          return;
+        }
         var draftRef = String(fd.get('draftRef') || '').trim();
         var note = String(fd.get('note') || '').trim();
-        l.officer = officer;
-        l.draftRef = draftRef;
-        l.status = 'with_officer';
-        l.stageSince = nowISO();
-        l.updatedAt = nowISO();
-        logEvent(l, 'Submitted to ' + officer + ' for signature', {
+        currentLetter.officer = officer;
+        currentLetter.draftRef = draftRef;
+        currentLetter.status = 'with_officer';
+        currentLetter.stageSince = nowISO();
+        currentLetter.updatedAt = nowISO();
+        logEvent(currentLetter, 'Submitted to ' + officer + ' for signature', {
           note: [note, draftRef ? 'Draft ref. ' + draftRef : ''].filter(Boolean).join(' · ')
         });
-        finish('Draft submitted to ' + officer);
+        return finish('Draft submitted to ' + officer);
       });
   }
 
@@ -1294,13 +1438,18 @@
       '</form>', function (fd, form) {
         var signedMs = fromDateInput(String(fd.get('signedOn') || ''));
         if (signedMs == null) { formError(form, 'Choose the date of signature.'); return; }
+        var currentLetter = byId(id);
+        if (!currentLetter || currentLetter.status !== 'with_officer') {
+          formError(form, 'This letter changed while the form was open. Reopen it and try again.');
+          return;
+        }
         var note = String(fd.get('note') || '').trim();
-        l.signedOn = new Date(signedMs).toISOString();
-        l.status = 'signed';
-        l.stageSince = nowISO();
-        l.updatedAt = nowISO();
-        logEvent(l, 'Signed by ' + (l.officer || 'the officer'), { note: note });
-        finish('Signature recorded — ready for dispatch');
+        currentLetter.signedOn = new Date(signedMs).toISOString();
+        currentLetter.status = 'signed';
+        currentLetter.stageSince = nowISO();
+        currentLetter.updatedAt = nowISO();
+        logEvent(currentLetter, 'Signed by ' + (currentLetter.officer || 'the officer'), { note: note });
+        return finish('Signature recorded — ready for dispatch');
       });
   }
 
@@ -1382,15 +1531,21 @@
     if (!l) return;
     if (l.status !== 'with_officer') { toast('This letter is not with an officer.'); return; }
 
-    loadDrafters().then(function (drafters) { openModal('<form class="modal-form">' +
+    loadDrafters().then(function (drafters) {
+      l = byId(id);
+      if (!l || l.status !== 'with_officer') {
+        toast('This letter changed while the drafting admins were loading. Reload the letter and try again.');
+        return;
+      }
+      openModal('<form class="modal-form">' +
       '<div class="modal-head">' +
       '<div><p class="modal-eyebrow">' + esc(l.refNo) + '</p><h2>Return the draft for revision</h2></div>' +
       '<button class="icon-btn" type="button" data-action="close-modal" aria-label="Close">' + iconClose() + '</button>' +
       '</div>' +
       '<div class="modal-body">' +
       drafterField(drafters) +
-      '<label class="field"><span>What has to be revised?</span>' +
-      '<textarea name="note" rows="3" placeholder="The officer’s observation, so the section knows what to change" required></textarea></label>' +
+      '<label class="field"><span>What has to be revised? (optional)</span>' +
+      '<textarea name="note" rows="3" placeholder="The officer’s observation, if available"></textarea></label>' +
       '<p class="form-note">The letter goes back to “Draft preparation”. The officer and draft reference are kept for reference.</p>' +
       '<p class="form-error" data-form-error hidden></p>' +
       '</div>' +
@@ -1402,13 +1557,19 @@
         var assignee = String(fd.get('draftAssignee') || '').trim();
         var note = String(fd.get('note') || '').trim();
         if (!assignee) { formError(form, 'Choose the admin who will handle the revision.'); return; }
-        if (!note) { formError(form, 'Record the observation so the revision is clear.'); return; }
-        l.draftAssignee = assignee;
-        l.status = 'drafting';
-        l.stageSince = nowISO();
-        l.updatedAt = nowISO();
-        logEvent(l, 'Returned by ' + (l.officer || 'the officer') + ' for revision', { note: note + ' · Assigned to ' + assignee });
-        finish('Revision assigned to ' + assignee);
+        var currentLetter = byId(id);
+        if (!currentLetter || currentLetter.status !== 'with_officer') {
+          formError(form, 'This letter changed while the form was open. Reopen it and try again.');
+          return;
+        }
+        currentLetter.draftAssignee = assignee;
+        currentLetter.status = 'drafting';
+        currentLetter.stageSince = nowISO();
+        currentLetter.updatedAt = nowISO();
+        logEvent(currentLetter, 'Returned by ' + (currentLetter.officer || 'the officer') + ' for revision', {
+          note: [note, 'Assigned to ' + assignee].filter(Boolean).join(' · ')
+        });
+        return finish('Revision assigned to ' + assignee);
       });
     }).catch(function (err) { toast(err.message || 'Drafting admins could not be loaded.'); });
   }
@@ -1591,6 +1752,7 @@
           throw err;
         }).then(function (serverState) {
           stateRevision = Number(serverState.revision) || 0;
+          serverSnapshot = snapshotState(normalize({ settings: serverState.settings, letters: serverState.letters }));
           var oldLetters = legacyState && Array.isArray(legacyState.letters) ? legacyState.letters : [];
           if (!serverState.initialized || (legacyState && !serverState.letters.length && oldLetters.length)) {
             state = normalize(legacyState);
@@ -1694,17 +1856,23 @@
     var letters = state.letters.slice().sort(function (a, b) {
       return (parseISO(b.createdAt) || 0) - (parseISO(a.createdAt) || 0);
     });
-    if (count) count.textContent = letters.length + ' letter' + (letters.length === 1 ? '' : 's') + ' submitted';
+    if (count) count.textContent = letters.length + ' letter' + (letters.length === 1 ? '' : 's') + ' in the register';
     rows.innerHTML = letters.map(function (letter) {
       var actions = canEditSectionSubmission(letter)
         ? '<button class="btn btn-tiny" type="button" data-action="edit-submission" data-id="' + esc(letter.id) + '">Edit</button> ' +
           '<button class="btn btn-tiny btn-danger" type="button" data-action="delete-submission" data-id="' + esc(letter.id) + '">Delete</button>'
         : (letter.status === 'received' ? '—' : 'Technical Section handling');
+      var sourceLetter = letter.attachment
+        ? (letter.fromSection === currentUser.sectionName
+          ? '<a class="linkish" href="/api/letters/' + encodeURIComponent(letter.id) + '/attachment">' + esc(letter.attachment.name) + '</a>'
+          : esc(letter.attachment.name) + ' (restricted)')
+        : '—';
       return '<tr><td class="cell-letter"><strong>' + esc(letter.refNo) + '</strong></td>' +
         '<td>' + esc(letter.subject) + '</td>' +
+        '<td>' + esc(letter.fromSection) + '</td>' +
         '<td>' + fmtDate(letter.receivedOn) + '</td>' +
         '<td><span class="pill s-' + esc(letter.status) + '">' + esc(STATUS[letter.status].label) + '</span></td>' +
-        '<td>' + (letter.attachment ? '<a class="linkish" href="/api/letters/' + encodeURIComponent(letter.id) + '/attachment">' + esc(letter.attachment.name) + '</a>' : '—') + '</td>' +
+        '<td>' + sourceLetter + '</td>' +
         '<td class="account-actions">' + actions + '</td></tr>';
     }).join('');
     if (empty) empty.hidden = letters.length > 0;
@@ -2164,7 +2332,7 @@
     });
     var filtered = applyFilters(list, af);
     filtered.sort(function (a, b) {
-      return (parseISO(b.createdAt) || 0) - (parseISO(a.createdAt) || 0) || String(b.id).localeCompare(String(a.id));
+      return (parseISO(a.createdAt) || 0) - (parseISO(b.createdAt) || 0) || String(a.id).localeCompare(String(b.id));
     });
 
     var openTab = $('[data-admin-tab="open"]');

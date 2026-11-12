@@ -364,9 +364,8 @@ async function handleApi(req, res, url) {
     const row = db.prepare('SELECT settings_json, letters_json, initialized, revision FROM portal_state WHERE id = 1').get();
     const user = sessionAccount(req);
     const settings = JSON.parse(row.settings_json);
-    let letters = JSON.parse(row.letters_json);
+    const letters = JSON.parse(row.letters_json);
     if (user && user.role === 'section_user') {
-      letters = withSignedPdfNames(letters.filter((letter) => letter.fromSection === user.sectionName));
       return sendJson(res, 200, {
         settings: {
           shed: settings.shed,

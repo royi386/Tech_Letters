@@ -6,7 +6,7 @@ sections, through drafting and signature, until they are dispatched.
 - **`index.html` — status board.** Read-only view of where every letter is right now.
 - **`admin.html` — admin console.** The register: enter letters, move them, dispatch them.
 - **`management.html` — Management.** Maintains the list of sections and administrator-managed user accounts.
-- **`section.html` — Section portal.** Section users submit incoming letters and upload the source document.
+- **`section.html` — Section portal.** Section users submit letters for their assigned section and view the full register.
 
 The admin console, Management page, and Section portal use server-side username/password
 authentication and a server-verified captcha. Letter records, settings, account data, and uploaded
@@ -28,8 +28,9 @@ at `/management.html`.
 The initial Main admin login is username `roy`, password `asdfasdf`. Change this password
 immediately after signing in from Management → Accounts. The Main admin can create administrator
 accounts or section-user accounts, each bound to one active section. Section users sign in at
-`/section.html`, submit letters into the admin register at **Received**, and can view submissions
-from their own section. Uploads accept PDF, JPG, PNG, or DOCX files up to 8 MB.
+`/section.html`, submit letters into the admin register at **Received**, and can view all letters in
+the register. A section user can submit, edit, or delete only their own letters for their assigned
+section. Uploads accept PDF, JPG, PNG, or DOCX files up to 8 MB.
 
 For other computers, set `HOST=0.0.0.0` and `COOKIE_SECURE=1`, then place the server behind a
 trusted HTTPS reverse proxy. Do not send passwords over plain HTTP on a shared network.
@@ -89,7 +90,7 @@ stay in the register, and the board filters still offer every section that appea
 | Signed by the officer | Signed — to dispatch | **Record dispatch** |
 | Sent by E-Office / Email / Telegram / Post | Dispatched · last 48 hrs | — |
 
-- **Return for revision** sends the draft back to Draft preparation and records the officer's
+- **Return for revision** sends the draft back to Draft preparation and can include the officer's
   observation in the letter's movement history.
 - **Record dispatch** asks for the route, the date and time, and an optional dispatch reference.
 - **48-hour rule:** a dispatched letter leaves the status board exactly 48 hours after the
