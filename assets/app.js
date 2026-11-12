@@ -525,6 +525,38 @@
     }, extra || {}));
   }
 
+  function workflowTimestampFields(letter) {
+    var hasSignedEvent = false;
+    var hasDispatchEvent = false;
+    letter.history.forEach(function (event) {
+      if (event.action.indexOf('Signed by ') === 0) hasSignedEvent = true;
+      if (event.action.indexOf('Dispatched via ') === 0) hasDispatchEvent = true;
+    });
+
+    var fields = letter.history.map(function (event, index) {
+      return '<label class="field span-2"><span>' + esc(event.action) +
+        (event.by ? ' · ' + esc(event.by) : '') + '</span>' +
+        '<input type="datetime-local" name="historyAt_' + index + '" value="' +
+        esc(localDateTimeValue(event.at)) + '" required></label>';
+    }).filter(Boolean).join('');
+
+    if (!hasSignedEvent && (letter.signedOn || letter.status === 'signed' || letter.status === 'dispatched')) {
+      fields += '<label class="field"><span>Signed on</span><input type="datetime-local" name="signedOnFallback" value="' +
+        esc(letter.signedOn ? localDateTimeValue(letter.signedOn) : '') +
+        '"' + (letter.status === 'signed' || letter.status === 'dispatched' ? ' required' : '') + '></label>';
+    }
+    if (!hasDispatchEvent && (letter.dispatchedAt || letter.status === 'dispatched')) {
+      fields += '<label class="field"><span>Dispatched on</span><input type="datetime-local" name="dispatchedAtFallback" value="' +
+        esc(letter.dispatchedAt ? localDateTimeValue(letter.dispatchedAt) : '') +
+        '"' + (letter.status === 'dispatched' ? ' required' : '') + '></label>';
+    }
+    if (!fields) fields = '<p class="form-note">No workflow events have been recorded yet.</p>';
+
+    return '<section class="topic"><h3>Workflow event dates and times</h3>' +
+      '<p class="form-note">Changing a signature or dispatch event also updates its date in the register.</p>' +
+      '<div class="form-grid">' + fields + '</div></section>';
+  }
+
   /* ---------------------------------------------------------
      Derived values
      --------------------------------------------------------- */
@@ -922,7 +954,9 @@
      --------------------------------------------------------- */
 
   function timelineHtml(letter) {
-    var items = letter.history.slice().reverse();
+    var items = letter.history.slice().sort(function (a, b) {
+      return (parseISO(b.at) || 0) - (parseISO(a.at) || 0);
+    });
     if (!items.length) return '<p class="form-note">No movement has been recorded yet.</p>';
     return '<ul class="timeline">' + items.map(function (h) {
       return '<li style="--tone:' + (TONE_COLOR[h.status] || '#8ba0b5') + '">' +
@@ -1170,7 +1204,7 @@
     if (id && !editing) return;
 
     var refValue = editing ? editing.refNo : '';
-    var receivedValue = editing ? dateInputValue(editing.receivedOn) : dateInputValue(Date.now());
+    var receivedValue = editing ? localDateTimeValue(editing.receivedOn) : dateInputValue(Date.now());
     var priorityValue = editing ? editing.priority : 'Routine';
     var sections = filterSections();
     if (editing && sections.indexOf(editing.fromSection) < 0) sections.push(editing.fromSection);
@@ -1190,7 +1224,9 @@
       '<label class="field span-2"><span>Subject</span>' +
       '<input name="subject" value="' + esc(editing ? editing.subject : '') + '" required autocomplete="off" placeholder="Short subject of the letter"></label>' +
       '<label class="field"><span>Received on</span>' +
-      '<input type="date" name="receivedOn" value="' + esc(receivedValue) + '" required></label>' +
+      '<input type="' + (editing ? 'datetime-local' : 'date') + '" name="receivedOn" value="' + esc(receivedValue) + '" required></label>' +
+      (editing ? '<label class="field"><span>Current stage started (delay tracking)</span>' +
+        '<input type="datetime-local" name="stageSince" value="' + esc(localDateTimeValue(editing.stageSince)) + '" required></label>' : '') +
       '<label class="field"><span>Letter reference</span>' +
       '<input name="refNo" value="' + esc(refValue) + '" required autocomplete="off"></label>' +
       '<label class="field"><span>Their letter no. / date</span>' +
@@ -1203,6 +1239,7 @@
       '<label class="field span-2"><span>Remarks (optional)</span>' +
       '<textarea name="remarks" rows="2" placeholder="Anything the section should note">' + esc(editing ? editing.remarks : '') + '</textarea></label>' +
       '</div>' +
+      (editing ? workflowTimestampFields(editing) : '') +
       '<p class="form-error" data-form-error hidden></p>' +
       '</div>' +
       '<div class="modal-foot">' +
@@ -1228,13 +1265,17 @@
     var refNo = String(fd.get('refNo') || '').trim();
     var subject = String(fd.get('subject') || '').trim();
     var fromSection = String(fd.get('fromSection') || '').trim();
-    var receivedMs = fromDateInput(String(fd.get('receivedOn') || ''));
+    var receivedMs = editingId
+      ? fromDateTimeInput(String(fd.get('receivedOn') || ''))
+      : fromDateInput(String(fd.get('receivedOn') || ''));
     var fromRef = String(fd.get('fromRef') || '').trim();
     var priority = PRIORITIES.indexOf(String(fd.get('priority'))) >= 0 ? String(fd.get('priority')) : 'Routine';
     var remarks = String(fd.get('remarks') || '').trim();
 
     if (!refNo || !subject || !fromSection || receivedMs == null) {
-      formError(form, 'Letter reference, subject, section and received date are required.');
+      formError(form, editingId
+        ? 'Letter reference, subject, section and received date and time are required.'
+        : 'Letter reference, subject, section and received date are required.');
       return;
     }
 
@@ -1249,6 +1290,57 @@
     if (editingId) {
       var letter = byId(editingId);
       if (!letter) return;
+      var stageSinceMs = fromDateTimeInput(String(fd.get('stageSince') || ''));
+      if (stageSinceMs == null) {
+        formError(form, 'Choose when the current stage started.');
+        return;
+      }
+
+      var history = [];
+      for (var i = 0; i < letter.history.length; i++) {
+        var event = Object.assign({}, letter.history[i]);
+        var historyMs = fromDateTimeInput(String(fd.get('historyAt_' + i) || ''));
+        if (historyMs == null) {
+          formError(form, 'Enter a valid date and time for each workflow event.');
+          return;
+        }
+        event.at = new Date(historyMs).toISOString();
+        history.push(event);
+      }
+
+      var signedEvent = null;
+      var dispatchEvent = null;
+      history.forEach(function (event) {
+        if (event.action.indexOf('Signed by ') === 0) signedEvent = event;
+        if (event.action.indexOf('Dispatched via ') === 0) dispatchEvent = event;
+      });
+      var signedFallbackMs = null;
+      var signedFallbackValue = fd.get('signedOnFallback');
+      if (signedFallbackValue != null && String(signedFallbackValue)) {
+        signedFallbackMs = fromDateTimeInput(String(signedFallbackValue));
+        if (signedFallbackMs == null) {
+          formError(form, 'Enter a valid signature date and time.');
+          return;
+        }
+      } else if (signedFallbackValue != null &&
+          (letter.status === 'signed' || letter.status === 'dispatched') && !signedEvent) {
+        formError(form, 'Enter the signature date and time.');
+        return;
+      }
+
+      var dispatchedFallbackMs = null;
+      var dispatchedFallbackValue = fd.get('dispatchedAtFallback');
+      if (dispatchedFallbackValue != null && String(dispatchedFallbackValue)) {
+        dispatchedFallbackMs = fromDateTimeInput(String(dispatchedFallbackValue));
+        if (dispatchedFallbackMs == null) {
+          formError(form, 'Enter a valid dispatch date and time.');
+          return;
+        }
+      } else if (dispatchedFallbackValue != null && letter.status === 'dispatched' && !dispatchEvent) {
+        formError(form, 'Enter the dispatch date and time.');
+        return;
+      }
+
       letter.refNo = refNo;
       letter.subject = subject;
       letter.fromSection = fromSection;
@@ -1256,6 +1348,14 @@
       letter.priority = priority;
       letter.remarks = remarks;
       letter.receivedOn = new Date(receivedMs).toISOString();
+      letter.stageSince = new Date(stageSinceMs).toISOString();
+      letter.history = history;
+      if (signedEvent) letter.signedOn = signedEvent.at;
+      else if (signedFallbackValue != null) letter.signedOn = signedFallbackMs == null ? null : new Date(signedFallbackMs).toISOString();
+      if (letter.status === 'dispatched' && dispatchEvent) letter.dispatchedAt = dispatchEvent.at;
+      else if (dispatchedFallbackValue != null) {
+        letter.dispatchedAt = dispatchedFallbackMs == null ? null : new Date(dispatchedFallbackMs).toISOString();
+      }
       letter.updatedAt = nowISO();
       logEvent(letter, 'Letter details updated');
       return finish('Letter details updated');

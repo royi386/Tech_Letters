@@ -100,6 +100,9 @@ stay in the register, and the board filters still offer every section that appea
 
 Every action is appended to the letter's movement history with the date, time and the
 "Recorded by" name from Settings.
+Administrators can use **Edit details** to adjust the received date and time, current-stage
+timer, and individual movement timestamps. Signature and dispatch event edits also update
+their corresponding register dates.
 
 ## Settings and backup
 
