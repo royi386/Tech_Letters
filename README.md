@@ -6,7 +6,7 @@ sections, through drafting and signature, until they are dispatched.
 - **`index.html` — status board.** Read-only view of where every letter is right now.
 - **`admin.html` — admin console.** The register: enter letters, move them, dispatch them.
 - **`management.html` — Management.** Maintains the list of sections and administrator-managed user accounts.
-- **`section.html` — Section portal.** Section users submit letters for their assigned section and view the full register.
+- **`section.html` — Section portal.** Section users submit letters and view/download only letters for their assigned section.
 
 The admin console, Management page, and Section portal use server-side username/password
 authentication and a server-verified captcha. Letter records, settings, account data, and uploaded
@@ -28,9 +28,9 @@ at `/management.html`.
 The initial Main admin login is username `roy`, password `asdfasdf`. Change this password
 immediately after signing in from Management → Accounts. The Main admin can create administrator
 accounts or section-user accounts, each bound to one active section. Section users sign in at
-`/section.html`, submit letters into the admin register at **Received**, and can view all letters in
-the register. They can search the full register, including dispatched letters archived from the
-status board, and download files attached to letters from any section. A section user can submit,
+`/section.html`, submit letters into the admin register at **Received**, and can view and download
+letters only from their assigned section. They can search their section’s letters, including
+dispatched letters archived from the status board. A section user can submit,
 edit, or delete only their own letters for their assigned section. Each submission can optionally
 include a signed letter (PDF, JPG, or PNG) and a Word document (DOCX), up to 8 MB per file.
 
@@ -88,12 +88,14 @@ stay in the register, and the board filters still offer every section that appea
 | --- | --- | --- |
 | Received from a section | Received from sections | **Start draft preparation** |
 | Draft being prepared | Draft preparation | **Submit to officer** |
-| Submitted to ADEE-1 / ADEE-2 / DEE / Sr.DEE | Submitted for signature (officer named) | **Record signature**, or **Return for revision** |
+| Submitted to ADEE-1 / ADEE-2 / DEE / Sr.DEE | Submitted for signature (officer named) | **Send to Sr.DEE** (from ADEE-1 / ADEE-2 / DEE), **Record signature**, or **Return for revision** |
 | Signed by the officer | Signed — to dispatch | **Record dispatch** |
 | Sent by E-Office / Email / Telegram / Post | Dispatched · last 48 hrs | — |
 
 - **Return for revision** sends the draft back to Draft preparation and can include the officer's
   observation in the letter's movement history.
+- While a letter is with ADEE-1, ADEE-2, or DEE, **Send to Sr.DEE** forwards it to Sr.DEE for
+  signature; it remains available for return to Draft preparation if revision is required.
 - **Record dispatch** asks for the route, the date and time, and an optional dispatch reference.
 - **48-hour rule:** a dispatched letter leaves the status board exactly 48 hours after the
   dispatch date and time entered. It is not deleted — the admin console keeps it, and ticking

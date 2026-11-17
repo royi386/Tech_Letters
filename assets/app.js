@@ -1134,6 +1134,9 @@
     if (l.status === 'drafting') steps.push(btnAction('submit-officer', id, 'Submit to officer', 'btn-primary'));
     if (l.status === 'with_officer') {
       steps.push(btnAction('mark-signed', id, 'Record signature', 'btn-primary'));
+      if (isForwardableOfficer(l.officer)) {
+        steps.push(btnAction('forward-sr-dee', id, 'Send to Sr.DEE', ''));
+      }
       steps.push(btnAction('return-draft', id, 'Return for revision', ''));
     }
     if (l.status === 'signed') steps.push(btnAction('mark-dispatched', id, 'Record dispatch', 'btn-primary'));
@@ -1687,6 +1690,52 @@
     }).catch(function (err) { toast(err.message || 'Drafting admins could not be loaded.'); });
   }
 
+  function isForwardableOfficer(officer) {
+    var normalized = String(officer || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    return normalized === 'ADEE1' || normalized === 'ADEE2' || normalized === 'DEE';
+  }
+
+  function openForwardToSrDee(id) {
+    if (!isAuthorized('admin')) return;
+    var letter = byId(id);
+    if (!letter || letter.status !== 'with_officer' || !isForwardableOfficer(letter.officer)) {
+      toast('This letter cannot be sent to Sr.DEE from its current stage.');
+      return;
+    }
+
+    var srDee = state.settings.officers.filter(function (officer) {
+      return String(officer).toUpperCase().replace(/[^A-Z0-9]/g, '') === 'SRDEE';
+    })[0] || 'Sr.DEE';
+    openModal('<form class="modal-form">' +
+      '<div class="modal-head">' +
+      '<div><p class="modal-eyebrow">' + esc(letter.refNo) + '</p><h2>Send the letter to ' + esc(srDee) + '</h2></div>' +
+      '<button class="icon-btn" type="button" data-action="close-modal" aria-label="Close">' + iconClose() + '</button>' +
+      '</div>' +
+      '<div class="modal-body">' +
+      '<p>The letter will be moved from ' + esc(letter.officer) + ' to ' + esc(srDee) + ' for signature.</p>' +
+      '<label class="field"><span>Note for the record (optional)</span><textarea name="note" rows="2"></textarea></label>' +
+      '<p class="form-error" data-form-error hidden></p>' +
+      '</div>' +
+      '<div class="modal-foot">' +
+      '<button class="btn" type="button" data-action="close-modal">Cancel</button>' +
+      '<button class="btn btn-primary" type="submit">Send to ' + esc(srDee) + '</button>' +
+      '</div>' +
+      '</form>', function (fd, form) {
+        var currentLetter = byId(id);
+        if (!currentLetter || currentLetter.status !== 'with_officer' || !isForwardableOfficer(currentLetter.officer)) {
+          formError(form, 'This letter changed while the form was open. Reopen it and try again.');
+          return;
+        }
+        var previousOfficer = currentLetter.officer;
+        var note = String(fd.get('note') || '').trim();
+        currentLetter.officer = srDee;
+        currentLetter.stageSince = nowISO();
+        currentLetter.updatedAt = nowISO();
+        logEvent(currentLetter, 'Forwarded from ' + previousOfficer + ' to ' + srDee, { note: note });
+        return finish('Letter sent to ' + srDee);
+      });
+  }
+
   function reopenLetter(id) {
     if (!isAuthorized('admin')) return;
     var l = byId(id);
@@ -1966,12 +2015,14 @@
     var count = $('[data-region="section-submission-count"]');
     var empty = $('[data-region="section-submissions-empty"]');
     if (!rows) return;
-    var allLetters = state.letters.slice().sort(function (a, b) {
+    var sectionLetters = state.letters.slice().filter(function (letter) {
+      return letter.fromSection === currentUser.sectionName;
+    }).sort(function (a, b) {
       return (parseISO(b.createdAt) || 0) - (parseISO(a.createdAt) || 0);
     });
     var search = $('#section-letter-search');
     var query = search ? String(search.value || '').trim().toLowerCase() : '';
-    var letters = query ? allLetters.filter(function (letter) {
+    var letters = query ? sectionLetters.filter(function (letter) {
       var haystack = [
         letter.refNo, letter.subject, letter.fromSection, letter.fromRef,
         letter.officer, letter.draftAssignee, letter.remarks, letter.dispatchMode, letter.dispatchRef,
@@ -1980,11 +2031,11 @@
         letter.signedPdfName
       ].join(' ').toLowerCase();
       return haystack.indexOf(query) >= 0;
-    }) : allLetters;
+    }) : sectionLetters;
     if (count) {
       count.textContent = query
-        ? letters.length + ' matching of ' + allLetters.length + ' letters in the register'
-        : allLetters.length + ' letters in the register, including archived dispatches';
+        ? letters.length + ' matching of ' + sectionLetters.length + ' letters from your section'
+        : sectionLetters.length + ' letters from your section, including archived dispatches';
     }
     rows.innerHTML = letters.map(function (letter) {
       var actions = canEditSectionSubmission(letter)
@@ -2012,7 +2063,7 @@
     }).join('');
     if (empty) {
       empty.hidden = letters.length > 0;
-      empty.textContent = query ? 'No letters match your search.' : 'No letters are in the register yet.';
+      empty.textContent = query ? 'No letters from your section match your search.' : 'No letters from your section are in the register yet.';
     }
   }
 
@@ -2897,6 +2948,9 @@
         break;
       case 'mark-signed':
         openSign(id);
+        break;
+      case 'forward-sr-dee':
+        openForwardToSrDee(id);
         break;
       case 'mark-dispatched':
         openDispatch(id);

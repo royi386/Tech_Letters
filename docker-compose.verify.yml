@@ -1,0 +1,8 @@
+services:
+  portal:
+    image: tech-letters-verify:local
+    pull_policy: never
+    environment:
+      COOKIE_SECURE: "0"
+    ports: !override
+      - "127.0.0.1:5174:5173"
