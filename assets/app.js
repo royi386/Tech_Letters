@@ -1149,6 +1149,7 @@
     }
     if (l.status === 'draft_eoffice') {
       steps.push(btnAction('mark-signed', id, 'Record signature', 'btn-primary'));
+      steps.push(btnAction('return-officer', id, 'Return to With officer', ''));
       if (isForwardableOfficer(l.officer)) {
         steps.push(btnAction('forward-sr-dee', id, 'Send to Sr.DEE', ''));
       }
@@ -1810,17 +1811,23 @@
     finish('Dispatch entry reopened');
   }
 
-  function revertSignature(id) {
+  function returnToOfficer(id) {
     if (!isAuthorized('admin')) return;
     var l = byId(id);
-    if (!l || l.status !== 'signed') return;
-    if (!window.confirm('Return this letter to With officer? Its signature date will be cleared, but the signature remains in movement history.')) return;
+    if (!l || (l.status !== 'signed' && l.status !== 'draft_eoffice')) return;
+    var wasSigned = l.status === 'signed';
+    var confirmation = wasSigned
+      ? 'Return this letter to With officer? Its signature date will be cleared, but the signature remains in movement history.'
+      : 'Return this e-office draft to With officer? The e-office movement remains in history.';
+    if (!window.confirm(confirmation)) return;
     l.status = 'with_officer';
-    l.signedOn = null;
+    if (wasSigned) l.signedOn = null;
     l.stageSince = nowISO();
     l.updatedAt = nowISO();
-    logEvent(l, 'Signature reverted; returned to ' + (l.officer || 'the officer'));
-    finish('Letter returned to With officer');
+    logEvent(l, wasSigned
+      ? 'Signature reverted; returned to ' + (l.officer || 'the officer')
+      : 'Draft returned from e-office to ' + (l.officer || 'the officer'));
+    finish(wasSigned ? 'Letter returned to With officer' : 'Draft returned to With officer');
   }
 
   function deleteLetter(id) {
@@ -3058,7 +3065,8 @@
         reopenLetter(id);
         break;
       case 'revert-signature':
-        revertSignature(id);
+      case 'return-officer':
+        returnToOfficer(id);
         break;
       case 'delete-letter':
         deleteLetter(id);
