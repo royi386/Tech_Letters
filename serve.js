@@ -592,7 +592,7 @@ async function handleApi(req, res, url) {
     }
   }
 
-  const submissionMatch = url.pathname.match(/^\/api\/submissions\/([a-f0-9-]+)$/i);
+  const submissionMatch = url.pathname.match(/^\/api\/submissions\/([a-z0-9-]+)$/i);
   if (submissionMatch && (req.method === 'PATCH' || req.method === 'DELETE')) {
     const user = requireSectionUser(req, res);
     if (!user) return;
@@ -678,7 +678,7 @@ async function handleApi(req, res, url) {
     }
   }
 
-  const attachmentMatch = url.pathname.match(/^\/api\/letters\/([a-f0-9-]+)\/attachment$/i);
+  const attachmentMatch = url.pathname.match(/^\/api\/letters\/([a-z0-9-]+)\/attachment$/i);
   if (attachmentMatch && req.method === 'GET') {
     const user = requireLogin(req, res, false);
     if (!user) return;
@@ -699,7 +699,7 @@ async function handleApi(req, res, url) {
     return res.end(row.data);
   }
 
-  const wordDocumentMatch = url.pathname.match(/^\/api\/letters\/([a-f0-9-]+)\/word-document$/i);
+  const wordDocumentMatch = url.pathname.match(/^\/api\/letters\/([a-z0-9-]+)\/word-document$/i);
   if (wordDocumentMatch && req.method === 'GET') {
     const user = requireLogin(req, res, false);
     if (!user) return;
