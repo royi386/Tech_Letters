@@ -184,7 +184,7 @@ svg{display:block}
 .main-admin{padding-top:0}
 .stats{
   position:relative;z-index:2;
-  display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px;
+  display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:14px;
   margin-top:-42px;margin-bottom:20px;
 }
 .tile{
@@ -210,6 +210,7 @@ svg{display:block}
 .tile-slate{--tile-color:#64748b}
 .tile-blue{--tile-color:#2563eb}
 .tile-amber{--tile-color:var(--amber-bright)}
+.tile-cyan{--tile-color:#0891b2}
 .tile-violet{--tile-color:#7c3aed}
 .tile-teal{--tile-color:var(--teal)}
 
@@ -255,7 +256,7 @@ svg{display:block}
 /* ---------------- Board ---------------- */
 
 .board{
-  display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px;align-items:start;
+  display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:14px;align-items:start;
 }
 .col{
   background:rgba(255,255,255,.55);
@@ -268,6 +269,7 @@ svg{display:block}
 .dot.received{background:#64748b;box-shadow:0 0 0 3px rgba(100,116,139,.14)}
 .dot.drafting{background:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.14)}
 .dot.with_officer{background:var(--amber-bright);box-shadow:0 0 0 3px rgba(240,180,41,.20)}
+.dot.draft_eoffice{background:#0891b2;box-shadow:0 0 0 3px rgba(8,145,178,.16)}
 .dot.signed{background:#7c3aed;box-shadow:0 0 0 3px rgba(124,58,237,.14)}
 .dot.dispatched{background:var(--teal);box-shadow:0 0 0 3px rgba(15,118,110,.14)}
 .col-head h2{font-size:12.5px;font-weight:750;letter-spacing:.01em;color:var(--ink);line-height:1.25}
@@ -302,6 +304,7 @@ svg{display:block}
 .letter-card.tone-received{--tone:#64748b}
 .letter-card.tone-drafting{--tone:#2563eb}
 .letter-card.tone-with_officer{--tone:var(--amber-bright)}
+.letter-card.tone-draft_eoffice{--tone:#0891b2}
 .letter-card.tone-signed{--tone:#7c3aed}
 .letter-card.tone-dispatched{--tone:var(--teal)}
 .card-head{display:flex;align-items:center;gap:8px;justify-content:space-between}
@@ -328,6 +331,7 @@ svg{display:block}
   max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
 }
 .tag-officer{background:var(--amber-soft);border-color:#f5e2b4;color:#8a5208}
+.tag-eoffice{background:#cffafe;border-color:#a5f3fc;color:#0e7490}
 .tag-teal{background:var(--teal-soft);border-color:#bfe5df;color:#0b5f58}
 .card-foot{
   display:flex;align-items:center;justify-content:space-between;gap:8px;
@@ -414,6 +418,7 @@ dialog.modal[open]{display:flex;flex-direction:column;animation:pop .16s ease-ou
 .pill.s-received{background:var(--slate-soft);color:#41566b}
 .pill.s-drafting{background:var(--blue-soft);color:#1e40af}
 .pill.s-with_officer{background:var(--amber-soft);color:#8a5208}
+.pill.s-draft_eoffice{background:#cffafe;color:#0e7490}
 .pill.s-signed{background:var(--violet-soft);color:#6b21a8}
 .pill.s-dispatched{background:var(--teal-soft);color:#0b5f58}
 
@@ -725,6 +730,7 @@ html[data-theme="dark"] .radio-chip input:checked + span::before{box-shadow:inse
 html[data-theme="dark"] .section-row{border-color:var(--line)}
 html[data-theme="dark"] .tag{color:#d0dbe6;background:#293b4b;border-color:#405367}
 html[data-theme="dark"] .tag-officer{color:#ffd27b;background:#49391b;border-color:#68552d}
+html[data-theme="dark"] .tag-eoffice{color:#a5f3fc;background:#164e63;border-color:#155e75}
 html[data-theme="dark"] .tag-teal{color:#9be2d5;background:#193b37;border-color:#2d5b54}
 html[data-theme="dark"] .tag-warning{color:#ffd27b;background:#49391b;border-color:#68552d}
 html[data-theme="dark"] .age.ok{color:#a7e8d9}
@@ -736,6 +742,7 @@ html[data-theme="dark"] .prio.p-immediate{color:#ff938a}
 html[data-theme="dark"] .pill.s-received{color:#d2deea}
 html[data-theme="dark"] .pill.s-drafting{color:#a9c5ff}
 html[data-theme="dark"] .pill.s-with_officer{color:#ffd27b}
+html[data-theme="dark"] .pill.s-draft_eoffice{color:#a5f3fc}
 html[data-theme="dark"] .pill.s-signed{color:#d1b3f2}
 html[data-theme="dark"] .pill.s-dispatched{color:#9be2d5}
 html[data-theme="dark"] .data-table tbody td{border-color:var(--line)}
@@ -812,9 +819,9 @@ html[data-theme="dark"] .captcha-code{
   .eyebrow,.tagline,.clock,.masthead-side,.toolbar,.board-meta,.footer,.footnote,.toast{display:none !important}
   .brand-text h1{color:#000;font-size:18px}
   .crest{color:#000;border-color:#999;background:none}
-  .stats{margin-top:12px;grid-template-columns:repeat(5,1fr)}
+  .stats{margin-top:12px;grid-template-columns:repeat(6,1fr)}
   .tile,.col,.letter-card,.panel{box-shadow:none}
-  .board{grid-template-columns:repeat(5,1fr)}
+  .board{grid-template-columns:repeat(6,1fr)}
   .letter-card{break-inside:avoid}
   .btn{display:none}
 }

@@ -77,15 +77,17 @@
     received: { label: 'Received', tone: 'received' },
     drafting: { label: 'Draft preparation', tone: 'drafting' },
     with_officer: { label: 'With officer', tone: 'with_officer' },
+    draft_eoffice: { label: 'Draft sent in e-office', tone: 'draft_eoffice' },
     signed: { label: 'Signed', tone: 'signed' },
     dispatched: { label: 'Dispatched', tone: 'dispatched' }
   };
-  var STATUS_ORDER = ['received', 'drafting', 'with_officer', 'signed', 'dispatched'];
+  var STATUS_ORDER = ['received', 'drafting', 'with_officer', 'draft_eoffice', 'signed', 'dispatched'];
 
   var BOARD = [
     { key: 'received', title: 'Received from sections', hint: 'New letters awaiting a draft' },
     { key: 'drafting', title: 'Draft preparation', hint: 'With the Technical Section' },
     { key: 'with_officer', title: 'Submitted for signature', hint: 'With the officer concerned' },
+    { key: 'draft_eoffice', title: 'Draft sent in e-office', hint: 'Awaiting officer signature' },
     { key: 'signed', title: 'Signed — to dispatch', hint: 'Awaiting dispatch' },
     { key: 'dispatched', title: 'Dispatched · last 48 hrs', hint: 'Leaves this board 2 days after dispatch' }
   ];
@@ -96,6 +98,7 @@
     received: '#94a3b8',
     drafting: '#2563eb',
     with_officer: '#f0b429',
+    draft_eoffice: '#0891b2',
     signed: '#7c3aed',
     dispatched: '#0f766e'
   };
@@ -115,7 +118,6 @@
   var stateRequestPending = false;
   var modalEl = null;
   var modalSubmit = null;
-  var pendingModal = null;
 
   /* ---------------------------------------------------------
      Small utilities
@@ -591,6 +593,8 @@
         return state.settings.unit;
       case 'with_officer':
         return letter.officer || 'Officer';
+      case 'draft_eoffice':
+        return 'Draft sent in e-office · ' + (letter.officer || 'Officer');
       case 'signed':
         return state.settings.unit + ' — dispatch';
       case 'dispatched':
@@ -653,11 +657,6 @@
   function openModal(html, onSubmit, options) {
     if (!modalEl) return;
     var next = { html: html, onSubmit: onSubmit || null, options: options || null };
-    if (modalEl.open) {
-      pendingModal = next;
-      modalEl.close();
-      return;
-    }
     showModal(next);
   }
 
@@ -665,7 +664,7 @@
     modalEl.classList.toggle('modal-sm', !!(next.options && next.options.small));
     modalEl.innerHTML = next.html;
     modalSubmit = next.onSubmit;
-    modalEl.showModal();
+    if (!modalEl.open) modalEl.showModal();
   }
 
   function closeModal() {
@@ -723,6 +722,7 @@
     fillSelect($('#a-officer'), state.settings.officers, 'All officers', af.officer);
 
     updateClock();
+    renderSessionChip();
   }
 
   function fillSelect(select, values, placeholder, current) {
@@ -794,6 +794,7 @@
     var open = visible.filter(function (l) { return l.status !== 'dispatched'; });
     var withSection = open.filter(function (l) { return l.status === 'received' || l.status === 'drafting'; });
     var withOfficer = open.filter(function (l) { return l.status === 'with_officer'; });
+    var eoffice = open.filter(function (l) { return l.status === 'draft_eoffice'; });
     var toDispatch = open.filter(function (l) { return l.status === 'signed'; });
     var dispatched = visible.filter(function (l) { return l.status === 'dispatched'; });
 
@@ -806,6 +807,7 @@
       { label: 'Open letters', value: open.length, hint: 'currently moving', tone: 'slate' },
       { label: 'With ' + state.settings.unit, value: withSection.length, hint: 'received or being drafted', tone: 'blue' },
       { label: 'With officers', value: withOfficer.length, hintHtml: officerHint || '<span>Awaiting signature</span>', tone: 'amber' },
+      { label: 'Draft sent in e-office', value: eoffice.length, hint: 'awaiting officer signature', tone: 'cyan' },
       { label: 'Awaiting dispatch', value: toDispatch.length, hint: 'signed and ready to send', tone: 'violet' },
       { label: 'Dispatched', value: dispatched.length, hint: 'leaves the board after 2 days', tone: 'teal' }
     ];
@@ -857,8 +859,11 @@
   function cardHtml(l) {
     var days = stageDays(l);
     var isSent = l.status === 'dispatched';
-    var officerTag = l.status === 'with_officer'
+    var officerTag = l.status === 'with_officer' || l.status === 'draft_eoffice'
       ? '<span class="tag tag-officer">' + esc(l.officer || 'Officer') + '</span>'
+      : '';
+    var eofficeTag = l.status === 'draft_eoffice'
+      ? '<span class="tag tag-eoffice">Draft sent in e-office</span>'
       : '';
     var signedTag = l.status === 'signed' && l.officer
       ? '<span class="tag tag-officer">Signed by ' + esc(l.officer) + '</span>'
@@ -878,7 +883,7 @@
       '<span class="subject">' + esc(l.subject) + '</span>' +
       '<span class="card-tags">' +
       '<span class="tag">From ' + esc(l.fromSection) + '</span>' +
-      officerTag + signedTag + drafterTag + sentTag +
+      officerTag + eofficeTag + signedTag + drafterTag + sentTag +
       '</span>' +
       '<span class="card-foot">' +
       '<span class="prio p-' + String(l.priority).toLowerCase() + '">' + esc(l.priority) + '</span>' +
@@ -994,6 +999,7 @@
   function attachmentLinkHtml(letter) {
     if (!letter.attachment || !letter.attachment.name) return '';
     if (!canDownloadLetterFiles()) return '';
+    if (currentUser && currentUser.role === 'section_user' && letter.fromSection !== currentUser.sectionName) return '';
     return '<section class="topic"><h3>Signed letter</h3><a class="linkish" href="/api/letters/' +
       encodeURIComponent(letter.id) + '/attachment">Download ' + esc(letter.attachment.name) + '</a></section>';
   }
@@ -1001,6 +1007,7 @@
   function wordDocumentLinkHtml(letter) {
     if (!letter.wordDocument || !letter.wordDocument.name) return '';
     if (!canDownloadLetterFiles()) return '';
+    if (currentUser && currentUser.role === 'section_user' && letter.fromSection !== currentUser.sectionName) return '';
     return '<section class="topic"><h3>Word document</h3><a class="linkish" href="/api/letters/' +
       encodeURIComponent(letter.id) + '/word-document">Download ' + esc(letter.wordDocument.name) + '</a></section>';
   }
@@ -1133,6 +1140,14 @@
     if (l.status === 'received') steps.push(btnAction('start-draft', id, 'Start draft preparation', 'btn-primary'));
     if (l.status === 'drafting') steps.push(btnAction('submit-officer', id, 'Submit to officer', 'btn-primary'));
     if (l.status === 'with_officer') {
+      steps.push(btnAction('send-draft-eoffice', id, 'Send draft via e-office', 'btn-primary'));
+      steps.push(btnAction('mark-signed', id, 'Record signature', ''));
+      if (isForwardableOfficer(l.officer)) {
+        steps.push(btnAction('forward-sr-dee', id, 'Send to Sr.DEE', ''));
+      }
+      steps.push(btnAction('return-draft', id, 'Return for revision', ''));
+    }
+    if (l.status === 'draft_eoffice') {
       steps.push(btnAction('mark-signed', id, 'Record signature', 'btn-primary'));
       if (isForwardableOfficer(l.officer)) {
         steps.push(btnAction('forward-sr-dee', id, 'Send to Sr.DEE', ''));
@@ -1528,7 +1543,10 @@
     if (!isAuthorized('admin')) return;
     var l = byId(id);
     if (!l) return;
-    if (l.status !== 'with_officer') { toast('This letter is not with an officer.'); return; }
+    if (l.status !== 'with_officer' && l.status !== 'draft_eoffice') {
+      toast('This letter is not awaiting an officer signature.');
+      return;
+    }
 
     openModal('<form class="modal-form">' +
       '<div class="modal-head">' +
@@ -1544,7 +1562,7 @@
       '<label class="field span-2"><span>Note (optional)</span>' +
       '<textarea name="note" rows="2" placeholder="Signature reference, remarks…"></textarea></label>' +
       '</div>' +
-      '<p class="form-note">Once signed, the letter moves to “Signed — to dispatch” and waits there until the dispatch is recorded.</p>' +
+      '<p class="form-note">E-office is optional. Once signed, the letter moves to “Signed — to dispatch” and waits there until the dispatch is recorded.</p>' +
       '<p class="form-error" data-form-error hidden></p>' +
       '</div>' +
       '<div class="modal-foot">' +
@@ -1555,7 +1573,7 @@
         var signedMs = fromDateInput(String(fd.get('signedOn') || ''));
         if (signedMs == null) { formError(form, 'Choose the date of signature.'); return; }
         var currentLetter = byId(id);
-        if (!currentLetter || currentLetter.status !== 'with_officer') {
+        if (!currentLetter || (currentLetter.status !== 'with_officer' && currentLetter.status !== 'draft_eoffice')) {
           formError(form, 'This letter changed while the form was open. Reopen it and try again.');
           return;
         }
@@ -1566,6 +1584,44 @@
         currentLetter.updatedAt = nowISO();
         logEvent(currentLetter, 'Signed by ' + (currentLetter.officer || 'the officer'), { note: note });
         return finish('Signature recorded — ready for dispatch');
+      });
+  }
+
+  function openSendDraftEoffice(id) {
+    if (!isAuthorized('admin')) return;
+    var letter = byId(id);
+    if (!letter || letter.status !== 'with_officer') {
+      toast('This letter is not awaiting the e-office step.');
+      return;
+    }
+
+    openModal('<form class="modal-form">' +
+      '<div class="modal-head">' +
+      '<div><p class="modal-eyebrow">' + esc(letter.refNo) + '</p><h2>Send draft via e-office</h2></div>' +
+      '<button class="icon-btn" type="button" data-action="close-modal" aria-label="Close">' + iconClose() + '</button>' +
+      '</div>' +
+      '<div class="modal-body">' +
+      '<p>The draft submitted to ' + esc(letter.officer || 'the officer') + ' will move to “Draft sent in e-office”.</p>' +
+      '<label class="field"><span>E-office reference or note (optional)</span><textarea name="note" rows="2"></textarea></label>' +
+      '<p class="form-error" data-form-error hidden></p>' +
+      '</div>' +
+      '<div class="modal-foot">' +
+      '<button class="btn" type="button" data-action="close-modal">Cancel</button>' +
+      '<button class="btn btn-primary" type="submit">Record e-office sending</button>' +
+      '</div>' +
+      '</form>', function (fd, form) {
+        var currentLetter = byId(id);
+        if (!currentLetter || currentLetter.status !== 'with_officer') {
+          formError(form, 'This letter changed while the form was open. Reopen it and try again.');
+          return;
+        }
+        currentLetter.status = 'draft_eoffice';
+        currentLetter.stageSince = nowISO();
+        currentLetter.updatedAt = nowISO();
+        logEvent(currentLetter, 'Draft sent in e-office to ' + (currentLetter.officer || 'the officer'), {
+          note: String(fd.get('note') || '').trim()
+        });
+        return finish('Draft sent in e-office');
       });
   }
 
@@ -1645,11 +1701,11 @@
     if (!isAuthorized('admin')) return;
     var l = byId(id);
     if (!l) return;
-    if (l.status !== 'with_officer') { toast('This letter is not with an officer.'); return; }
+    if (l.status !== 'with_officer' && l.status !== 'draft_eoffice') { toast('This letter is not with an officer.'); return; }
 
     loadDrafters().then(function (drafters) {
       l = byId(id);
-      if (!l || l.status !== 'with_officer') {
+      if (!l || (l.status !== 'with_officer' && l.status !== 'draft_eoffice')) {
         toast('This letter changed while the drafting admins were loading. Reload the letter and try again.');
         return;
       }
@@ -1674,7 +1730,7 @@
         var note = String(fd.get('note') || '').trim();
         if (!assignee) { formError(form, 'Choose the admin who will handle the revision.'); return; }
         var currentLetter = byId(id);
-        if (!currentLetter || currentLetter.status !== 'with_officer') {
+        if (!currentLetter || (currentLetter.status !== 'with_officer' && currentLetter.status !== 'draft_eoffice')) {
           formError(form, 'This letter changed while the form was open. Reopen it and try again.');
           return;
         }
@@ -1698,7 +1754,7 @@
   function openForwardToSrDee(id) {
     if (!isAuthorized('admin')) return;
     var letter = byId(id);
-    if (!letter || letter.status !== 'with_officer' || !isForwardableOfficer(letter.officer)) {
+    if (!letter || (letter.status !== 'with_officer' && letter.status !== 'draft_eoffice') || !isForwardableOfficer(letter.officer)) {
       toast('This letter cannot be sent to Sr.DEE from its current stage.');
       return;
     }
@@ -1722,7 +1778,7 @@
       '</div>' +
       '</form>', function (fd, form) {
         var currentLetter = byId(id);
-        if (!currentLetter || currentLetter.status !== 'with_officer' || !isForwardableOfficer(currentLetter.officer)) {
+        if (!currentLetter || (currentLetter.status !== 'with_officer' && currentLetter.status !== 'draft_eoffice') || !isForwardableOfficer(currentLetter.officer)) {
           formError(form, 'This letter changed while the form was open. Reopen it and try again.');
           return;
         }
@@ -1799,13 +1855,49 @@
   function renderSessionChip() {
     var holder = $('[data-region="session"]');
     if (!holder) return;
-    var role = page === 'section' ? 'section' : (page === 'management' || page === 'admin' ? 'admin' : '');
-    if (page === 'view' || !isAuthorized(role)) {
+    if (!currentUser) {
       holder.innerHTML = '';
       return;
     }
     holder.innerHTML = '<span class="session-user" title="Signed in">' + esc(signedInUser()) + '</span>' +
+      '<button class="btn btn-ghost-light btn-tiny" type="button" data-action="change-password">Change password</button>' +
       '<button class="btn btn-ghost-light btn-tiny" type="button" data-action="lock">Lock</button>';
+  }
+
+  function openChangePassword() {
+    if (!currentUser) return;
+    openModal('<form class="modal-form" autocomplete="off">' +
+      '<div class="modal-head"><div><p class="modal-eyebrow">Account security</p><h2>Change your password</h2></div>' +
+      '<button class="icon-btn" type="button" data-action="close-modal" aria-label="Close">' + iconClose() + '</button></div>' +
+      '<div class="modal-body"><div class="form-grid">' +
+      '<label class="field span-2"><span>Current password</span><input type="password" name="currentPassword" required autocomplete="current-password"></label>' +
+      '<label class="field"><span>New password (at least 8 characters)</span><input type="password" name="newPassword" minlength="8" required autocomplete="new-password"></label>' +
+      '<label class="field"><span>Confirm new password</span><input type="password" name="confirmPassword" minlength="8" required autocomplete="new-password"></label>' +
+      '</div><p class="form-note">Changing your password signs out other active sessions for this account.</p>' +
+      '<p class="form-error" data-form-error hidden></p></div>' +
+      '<div class="modal-foot"><button class="btn" type="button" data-action="close-modal">Cancel</button>' +
+      '<button class="btn btn-primary" type="submit">Change password</button></div></form>', function (fd, form) {
+        var currentPassword = String(fd.get('currentPassword') || '');
+        var newPassword = String(fd.get('newPassword') || '');
+        var confirmPassword = String(fd.get('confirmPassword') || '');
+        if (newPassword.length < 8) {
+          formError(form, 'Use a password of at least 8 characters.');
+          return Promise.resolve();
+        }
+        if (newPassword !== confirmPassword) {
+          formError(form, 'The new passwords do not match.');
+          return Promise.resolve();
+        }
+        return apiRequest('/api/change-password', {
+          method: 'POST',
+          body: { currentPassword: currentPassword, newPassword: newPassword }
+        }).then(function () {
+          closeModal();
+          toast('Password changed successfully');
+        }).catch(function (err) {
+          formError(form, err.message || 'The password could not be changed.');
+        });
+      });
   }
 
   function iconRefresh() {
@@ -2015,55 +2107,40 @@
     var count = $('[data-region="section-submission-count"]');
     var empty = $('[data-region="section-submissions-empty"]');
     if (!rows) return;
-    var sectionLetters = state.letters.slice().filter(function (letter) {
-      return letter.fromSection === currentUser.sectionName;
+    var dispatchedLetters = state.letters.slice().filter(function (letter) {
+      return letter.status === 'dispatched';
     }).sort(function (a, b) {
-      return (parseISO(b.createdAt) || 0) - (parseISO(a.createdAt) || 0);
+      return (parseISO(b.dispatchedAt) || 0) - (parseISO(a.dispatchedAt) || 0);
     });
     var search = $('#section-letter-search');
     var query = search ? String(search.value || '').trim().toLowerCase() : '';
-    var letters = query ? sectionLetters.filter(function (letter) {
+    var letters = query ? dispatchedLetters.filter(function (letter) {
       var haystack = [
         letter.refNo, letter.subject, letter.fromSection, letter.fromRef,
         letter.officer, letter.draftAssignee, letter.remarks, letter.dispatchMode, letter.dispatchRef,
-        letter.attachment ? letter.attachment.name : '',
-        letter.wordDocument ? letter.wordDocument.name : '',
         letter.signedPdfName
       ].join(' ').toLowerCase();
       return haystack.indexOf(query) >= 0;
-    }) : sectionLetters;
+    }) : dispatchedLetters;
     if (count) {
       count.textContent = query
-        ? letters.length + ' matching of ' + sectionLetters.length + ' letters from your section'
-        : sectionLetters.length + ' letters from your section, including archived dispatches';
+        ? letters.length + ' matching of ' + dispatchedLetters.length + ' dispatched letters'
+        : dispatchedLetters.length + ' dispatched letters from all sections';
     }
     rows.innerHTML = letters.map(function (letter) {
-      var actions = canEditSectionSubmission(letter)
-        ? '<button class="btn btn-tiny" type="button" data-action="edit-submission" data-id="' + esc(letter.id) + '">Edit</button> ' +
-          '<button class="btn btn-tiny btn-danger" type="button" data-action="delete-submission" data-id="' + esc(letter.id) + '">Delete</button>'
-        : (letter.status === 'received' ? '—' : 'Technical Section handling');
-      var signedLetter = letter.attachment
-        ? '<a class="linkish" href="/api/letters/' + encodeURIComponent(letter.id) + '/attachment">' + esc(letter.attachment.name) + '</a>'
-        : '—';
-      var wordDocument = letter.wordDocument
-        ? '<a class="linkish" href="/api/letters/' + encodeURIComponent(letter.id) + '/word-document">' + esc(letter.wordDocument.name) + '</a>'
-        : '—';
       var finalSignedPdf = letter.signedPdfName && letter.status === 'dispatched'
         ? '<a class="linkish" href="/api/letters/' + encodeURIComponent(letter.id) + '/signed-pdf">' + esc(letter.signedPdfName) + '</a>'
         : '—';
       return '<tr><td class="cell-letter"><strong>' + esc(letter.refNo) + '</strong></td>' +
         '<td>' + esc(letter.subject) + '</td>' +
         '<td>' + esc(letter.fromSection) + '</td>' +
-        '<td>' + fmtDate(letter.receivedOn) + '</td>' +
-        '<td><span class="pill s-' + esc(letter.status) + '">' + esc(STATUS[letter.status].label) + '</span></td>' +
-        '<td>' + signedLetter + '</td>' +
-        '<td>' + wordDocument + '</td>' +
-        '<td>' + finalSignedPdf + '</td>' +
-        '<td class="account-actions">' + actions + '</td></tr>';
+        '<td>' + fmtDate(letter.dispatchedAt) + '</td>' +
+        '<td>' + esc(letter.dispatchMode || '—') + '</td>' +
+        '<td>' + finalSignedPdf + '</td></tr>';
     }).join('');
     if (empty) {
       empty.hidden = letters.length > 0;
-      empty.textContent = query ? 'No letters from your section match your search.' : 'No letters from your section are in the register yet.';
+      empty.textContent = query ? 'No dispatched letters match your search.' : 'No letters have been dispatched yet.';
     }
   }
 
@@ -2949,6 +3026,9 @@
       case 'mark-signed':
         openSign(id);
         break;
+      case 'send-draft-eoffice':
+        openSendDraftEoffice(id);
+        break;
       case 'forward-sr-dee':
         openForwardToSrDee(id);
         break;
@@ -2987,6 +3067,9 @@
         break;
       case 'remove-account':
         removeAccount(id);
+        break;
+      case 'change-password':
+        openChangePassword();
         break;
       case 'lock':
         apiRequest('/api/logout', { method: 'POST' }).catch(function () {}).then(function () {
@@ -3070,11 +3153,6 @@
       modalEl.addEventListener('close', function () {
         modalSubmit = null;
         modalEl.innerHTML = '';
-        if (pendingModal) {
-          var next = pendingModal;
-          pendingModal = null;
-          showModal(next);
-        }
       });
     }
 

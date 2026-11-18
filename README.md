@@ -28,11 +28,14 @@ at `/management.html`.
 The initial Main admin login is username `roy`, password `asdfasdf`. Change this password
 immediately after signing in from Management → Accounts. The Main admin can create administrator
 accounts or section-user accounts, each bound to one active section. Section users sign in at
-`/section.html`, submit letters into the admin register at **Received**, and can view and download
-letters only from their assigned section. They can search their section’s letters, including
-dispatched letters archived from the status board. A section user can submit,
+`/section.html`, submit letters into the admin register at **Received**, and see all sections’
+letters and movement histories on the status board. The Section portal lists dispatched letters
+from all sections and provides the final signed PDF when available. Original source documents remain
+limited to the assigned section. A section user can submit,
 edit, or delete only their own letters for their assigned section. Each submission can optionally
 include a signed letter (PDF, JPG, or PNG) and a Word document (DOCX), up to 8 MB per file.
+Administrators and section users can change their own passwords after signing in. The Main admin can
+also continue managing account credentials from Management.
 
 For other computers, set `HOST=0.0.0.0` and `COOKIE_SECURE=1`, then place the server behind a
 trusted HTTPS reverse proxy. Do not send passwords over plain HTTP on a shared network.
@@ -88,7 +91,8 @@ stay in the register, and the board filters still offer every section that appea
 | --- | --- | --- |
 | Received from a section | Received from sections | **Start draft preparation** |
 | Draft being prepared | Draft preparation | **Submit to officer** |
-| Submitted to ADEE-1 / ADEE-2 / DEE / Sr.DEE | Submitted for signature (officer named) | **Send to Sr.DEE** (from ADEE-1 / ADEE-2 / DEE), **Record signature**, or **Return for revision** |
+| Submitted to ADEE-1 / ADEE-2 / DEE / Sr.DEE | Submitted for signature (officer named) | **Record signature** directly, **Send draft via e-office** (optional), **Send to Sr.DEE** (from ADEE-1 / ADEE-2 / DEE), or **Return for revision** |
+| Draft sent in e-office | Draft sent in e-office (officer named) | **Send to Sr.DEE** (from ADEE-1 / ADEE-2 / DEE), **Record signature**, or **Return for revision** |
 | Signed by the officer | Signed — to dispatch | **Record dispatch** |
 | Sent by E-Office / Email / Telegram / Post | Dispatched · last 48 hrs | — |
 
@@ -96,6 +100,7 @@ stay in the register, and the board filters still offer every section that appea
   observation in the letter's movement history.
 - While a letter is with ADEE-1, ADEE-2, or DEE, **Send to Sr.DEE** forwards it to Sr.DEE for
   signature; it remains available for return to Draft preparation if revision is required.
+- **Draft sent in e-office** is optional; the signature can be recorded directly while the letter is with the officer.
 - **Record dispatch** asks for the route, the date and time, and an optional dispatch reference.
 - **48-hour rule:** a dispatched letter leaves the status board exactly 48 hours after the
   dispatch date and time entered. It is not deleted — the admin console keeps it, and ticking

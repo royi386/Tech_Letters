@@ -395,24 +395,37 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { user }, { 'set-cookie': sessionCookie(token) });
   }
 
+  if (req.method === 'POST' && url.pathname === '/api/change-password') {
+    const user = requireLogin(req, res, false);
+    if (!user) return;
+    const body = await readBody(req);
+    const currentPassword = String(body.currentPassword || '');
+    const newPassword = String(body.newPassword || '');
+    if (newPassword.length < 8) return sendJson(res, 400, { error: 'Use a password of at least 8 characters.' });
+    const account = db.prepare('SELECT password_salt, password_hash FROM accounts WHERE id = ?').get(user.id);
+    const candidate = crypto.pbkdf2Sync(currentPassword, account.password_salt, PASSWORD_ITERATIONS, 32, 'sha256').toString('hex');
+    if (!safeEqualHex(candidate, account.password_hash)) {
+      return sendJson(res, 400, { error: 'The current password is incorrect.' });
+    }
+    if (currentPassword === newPassword) {
+      return sendJson(res, 400, { error: 'Choose a new password different from your current password.' });
+    }
+    const cookie = String(req.headers.cookie || '').split(';').map((part) => part.trim())
+      .find((part) => part.startsWith('elx_session='));
+    const token = decodeURIComponent(cookie.slice('elx_session='.length));
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    const salt = crypto.randomBytes(16).toString('hex');
+    const passwordHash = crypto.pbkdf2Sync(newPassword, salt, PASSWORD_ITERATIONS, 32, 'sha256').toString('hex');
+    db.prepare('UPDATE accounts SET password_salt = ?, password_hash = ? WHERE id = ?')
+      .run(salt, passwordHash, user.id);
+    db.prepare('DELETE FROM sessions WHERE account_id = ? AND token_hash != ?').run(user.id, tokenHash);
+    return sendJson(res, 200, { ok: true });
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/state') {
     const row = db.prepare('SELECT settings_json, letters_json, initialized, revision FROM portal_state WHERE id = 1').get();
-    const user = sessionAccount(req);
     const settings = JSON.parse(row.settings_json);
     const letters = JSON.parse(row.letters_json);
-    if (user && user.role === 'section_user') {
-      return sendJson(res, 200, {
-        settings: {
-          shed: settings.shed,
-          unit: settings.unit,
-          refPrefix: settings.refPrefix,
-          sections: [user.sectionName]
-        },
-        letters: withSignedPdfNames(letters.filter((letter) => letter.fromSection === user.sectionName)),
-        initialized: !!row.initialized,
-        revision: row.revision
-      });
-    }
     return sendJson(res, 200, {
       settings,
       letters: withSignedPdfNames(letters),
@@ -693,7 +706,7 @@ async function handleApi(req, res, url) {
     const stateRow = db.prepare('SELECT letters_json FROM portal_state WHERE id = 1').get();
     const letter = JSON.parse(stateRow.letters_json).find((item) => item.id === signedPdfMatch[1]);
     if (!letter || letter.status !== 'dispatched') return sendJson(res, 404, { error: 'Signed letter not found.' });
-    if (user.role !== 'admin' && (user.role !== 'section_user' || letter.fromSection !== user.sectionName)) {
+    if (user.role !== 'admin' && (user.role !== 'section_user' || !user.sectionName)) {
       return sendJson(res, 404, { error: 'Signed letter not found.' });
     }
     const row = db.prepare('SELECT filename, data FROM signed_letter_attachments WHERE letter_id = ?').get(signedPdfMatch[1]);
