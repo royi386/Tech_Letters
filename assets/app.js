@@ -1154,7 +1154,10 @@
       }
       steps.push(btnAction('return-draft', id, 'Return for revision', ''));
     }
-    if (l.status === 'signed') steps.push(btnAction('mark-dispatched', id, 'Record dispatch', 'btn-primary'));
+    if (l.status === 'signed') {
+      steps.push(btnAction('mark-dispatched', id, 'Record dispatch', 'btn-primary'));
+      steps.push(btnAction('revert-signature', id, 'Return to With officer', ''));
+    }
     if (l.status === 'dispatched') steps.push(btnAction('reopen-letter', id, 'Reopen (undo dispatch)', ''));
 
     openModal('<div class="modal-head">' +
@@ -1805,6 +1808,19 @@
     l.updatedAt = nowISO();
     logEvent(l, 'Dispatch entry reopened');
     finish('Dispatch entry reopened');
+  }
+
+  function revertSignature(id) {
+    if (!isAuthorized('admin')) return;
+    var l = byId(id);
+    if (!l || l.status !== 'signed') return;
+    if (!window.confirm('Return this letter to With officer? Its signature date will be cleared, but the signature remains in movement history.')) return;
+    l.status = 'with_officer';
+    l.signedOn = null;
+    l.stageSince = nowISO();
+    l.updatedAt = nowISO();
+    logEvent(l, 'Signature reverted; returned to ' + (l.officer || 'the officer'));
+    finish('Letter returned to With officer');
   }
 
   function deleteLetter(id) {
@@ -3040,6 +3056,9 @@
         break;
       case 'reopen-letter':
         reopenLetter(id);
+        break;
+      case 'revert-signature':
+        revertSignature(id);
         break;
       case 'delete-letter':
         deleteLetter(id);

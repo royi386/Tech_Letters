@@ -93,7 +93,7 @@ stay in the register, and the board filters still offer every section that appea
 | Draft being prepared | Draft preparation | **Submit to officer** |
 | Submitted to ADEE-1 / ADEE-2 / DEE / Sr.DEE | Submitted for signature (officer named) | **Record signature** directly, **Send draft via e-office** (optional), **Send to Sr.DEE** (from ADEE-1 / ADEE-2 / DEE), or **Return for revision** |
 | Draft sent in e-office | Draft sent in e-office (officer named) | **Send to Sr.DEE** (from ADEE-1 / ADEE-2 / DEE), **Record signature**, or **Return for revision** |
-| Signed by the officer | Signed — to dispatch | **Record dispatch** |
+| Signed by the officer | Signed — to dispatch | **Record dispatch** or **Return to With officer** if the signature workflow was started by mistake |
 | Sent by E-Office / Email / Telegram / Post | Dispatched · last 48 hrs | — |
 
 - **Return for revision** sends the draft back to Draft preparation and can include the officer's
@@ -101,6 +101,7 @@ stay in the register, and the board filters still offer every section that appea
 - While a letter is with ADEE-1, ADEE-2, or DEE, **Send to Sr.DEE** forwards it to Sr.DEE for
   signature; it remains available for return to Draft preparation if revision is required.
 - **Draft sent in e-office** is optional; the signature can be recorded directly while the letter is with the officer.
+- **Return to With officer** clears the current signature date but retains the prior signature event in the movement history.
 - **Record dispatch** asks for the route, the date and time, and an optional dispatch reference.
 - **48-hour rule:** a dispatched letter leaves the status board exactly 48 hours after the
   dispatch date and time entered. It is not deleted — the admin console keeps it, and ticking
