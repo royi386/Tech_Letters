@@ -34,6 +34,7 @@ from all sections and provides the final signed PDF when available. Original sou
 limited to the assigned section. A section user can submit,
 edit, or delete only their own letters for their assigned section. Each submission can optionally
 include a signed letter (PDF, JPG, or PNG) and a Word document (DOCX), up to 8 MB per file.
+Administrators can upload or replace a source PDF (up to 8 MB) when creating a letter or editing its details.
 Administrators and section users can change their own passwords after signing in. The Main admin can
 also continue managing account credentials from Management.
 

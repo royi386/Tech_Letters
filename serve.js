@@ -311,6 +311,14 @@ function parseSignedPdf(value) {
   return attachment;
 }
 
+function parseSourcePdf(value) {
+  const attachment = parseAttachment(Object.assign({}, value, { type: 'application/pdf' }));
+  if (!/\.pdf$/i.test(attachment.filename) || attachment.data.subarray(0, 5).toString('ascii') !== '%PDF-') {
+    throw Object.assign(new Error('Choose a valid PDF file for the source letter.'), { status: 400 });
+  }
+  return attachment;
+}
+
 function withSignedPdfNames(letters) {
   const files = db.prepare('SELECT letter_id, filename FROM signed_letter_attachments').all();
   const names = new Map(files.map((file) => [file.letter_id, file.filename]));
@@ -436,7 +444,7 @@ async function handleApi(req, res, url) {
 
   if (req.method === 'PUT' && url.pathname === '/api/state') {
     if (!requireAdmin(req, res)) return;
-    const body = await readBody(req, 12 * 1024 * 1024);
+    const body = await readBody(req, 16 * 1024 * 1024);
     if (!body.settings || !Array.isArray(body.letters)) return sendJson(res, 400, { error: 'Invalid portal state.' });
     let signedPdf = null;
     if (body.signedPdf) {
@@ -446,6 +454,13 @@ async function handleApi(req, res, url) {
         return sendJson(res, 400, { error: 'A signed PDF can only be attached to a dispatched letter.' });
       }
       signedPdf = Object.assign(parseSignedPdf(body.signedPdf), { letterId: signedLetterId });
+    }
+    let sourcePdf = null;
+    if (body.sourcePdf) {
+      const sourceLetterId = String(body.sourcePdf.letterId || '');
+      const sourceLetter = body.letters.find((letter) => String(letter.id) === sourceLetterId);
+      if (!sourceLetter) return sendJson(res, 400, { error: 'The source PDF must belong to a letter in the register.' });
+      sourcePdf = Object.assign(parseSourcePdf(body.sourcePdf), { letterId: sourceLetterId });
     }
     const lettersForStorage = body.letters.map(({ signedPdfName, ...letter }) => letter);
     db.exec('BEGIN IMMEDIATE');
@@ -486,6 +501,13 @@ async function handleApi(req, res, url) {
           ON CONFLICT(letter_id) DO UPDATE SET filename = excluded.filename, content_type = excluded.content_type,
             data = excluded.data, created_at = excluded.created_at`)
           .run(signedPdf.letterId, signedPdf.filename, signedPdf.contentType, signedPdf.data, new Date().toISOString());
+      }
+      if (sourcePdf) {
+        db.prepare(`INSERT INTO letter_attachments (letter_id, filename, content_type, data, created_at)
+          VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(letter_id) DO UPDATE SET filename = excluded.filename, content_type = excluded.content_type,
+            data = excluded.data, created_at = excluded.created_at`)
+          .run(sourcePdf.letterId, sourcePdf.filename, sourcePdf.contentType, sourcePdf.data, new Date().toISOString());
       }
       db.exec('COMMIT');
       return sendJson(res, 200, { ok: true, revision });

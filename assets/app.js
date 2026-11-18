@@ -1000,7 +1000,7 @@
     if (!letter.attachment || !letter.attachment.name) return '';
     if (!canDownloadLetterFiles()) return '';
     if (currentUser && currentUser.role === 'section_user' && letter.fromSection !== currentUser.sectionName) return '';
-    return '<section class="topic"><h3>Signed letter</h3><a class="linkish" href="/api/letters/' +
+    return '<section class="topic"><h3>Source letter</h3><a class="linkish" href="/api/letters/' +
       encodeURIComponent(letter.id) + '/attachment">Download ' + esc(letter.attachment.name) + '</a></section>';
   }
 
@@ -1260,6 +1260,10 @@
         return '<option' + (p === priorityValue ? ' selected' : '') + '>' + p + '</option>';
       }).join('') +
       '</select></label>' +
+      '<label class="field span-2"><span>Source PDF from section (optional; up to 8 MB)</span>' +
+      '<input type="file" name="sourcePdf" accept=".pdf,application/pdf"></label>' +
+      (editing && editing.attachment ? '<p class="form-note span-2">Current source file: <a class="linkish" href="/api/letters/' +
+        encodeURIComponent(editing.id) + '/attachment">' + esc(editing.attachment.name) + '</a></p>' : '') +
       '<label class="field span-2"><span>Remarks (optional)</span>' +
       '<textarea name="remarks" rows="2" placeholder="Anything the section should note">' + esc(editing ? editing.remarks : '') + '</textarea></label>' +
       '</div>' +
@@ -1289,6 +1293,7 @@
     var refNo = String(fd.get('refNo') || '').trim();
     var subject = String(fd.get('subject') || '').trim();
     var fromSection = String(fd.get('fromSection') || '').trim();
+    var sourcePdfFile = fd.get('sourcePdf');
     var receivedMs = editingId
       ? fromDateTimeInput(String(fd.get('receivedOn') || ''))
       : fromDateInput(String(fd.get('receivedOn') || ''));
@@ -1308,6 +1313,14 @@
     })[0];
     if (duplicate) {
       formError(form, 'That reference is already used by ' + duplicate.refNo + '. Choose another.');
+      return;
+    }
+
+    if (sourcePdfFile && sourcePdfFile.name &&
+        (!/\.pdf$/i.test(sourcePdfFile.name) || sourcePdfFile.size > 8 * 1024 * 1024)) {
+      formError(form, sourcePdfFile.size > 8 * 1024 * 1024
+        ? 'The source PDF must be no larger than 8 MB.'
+        : 'Choose a PDF file for the source letter.');
       return;
     }
 
@@ -1381,7 +1394,7 @@
         letter.dispatchedAt = dispatchedFallbackMs == null ? null : new Date(dispatchedFallbackMs).toISOString();
       }
       letter.updatedAt = nowISO();
-      return finish('Letter details updated');
+      return finishLetterSave(form, letter, sourcePdfFile, 'Letter details updated');
     }
 
     var created = new Date(receivedMs).toISOString();
@@ -1406,11 +1419,47 @@
       }]
     });
     state.letters.push(fresh);
-    return finish('Letter ' + fresh.refNo + ' added to the board').then(function (saved) {
+    return finishLetterSave(form, fresh, sourcePdfFile, 'Letter ' + fresh.refNo + ' added to the board').then(function (saved) {
       if (!saved) {
         state.letters.pop();
         formError(form, 'The database could not save this change.');
       }
+    });
+  }
+
+  function finishLetterSave(form, letter, file, message) {
+    if (!file || !file.name) return finish(message);
+    var submit = form.querySelector('button[type="submit"]');
+    if (submit) submit.disabled = true;
+    var previousAttachment = letter.attachment;
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () {
+        if (typeof reader.result !== 'string') {
+          reject(new Error('The source PDF could not be read.'));
+          return;
+        }
+        resolve({
+          name: file.name,
+          type: 'application/pdf',
+          data: reader.result
+        });
+      };
+      reader.onerror = function () { reject(new Error('The source PDF could not be read.')); };
+      reader.readAsDataURL(file);
+    }).then(function (sourcePdf) {
+      letter.attachment = { name: sourcePdf.name, type: sourcePdf.type };
+      return finish(message, { sourcePdf: Object.assign({ letterId: letter.id }, sourcePdf) }).then(function (saved) {
+        if (!saved) {
+          letter.attachment = previousAttachment;
+          if (submit) submit.disabled = false;
+        }
+        return saved;
+      });
+    }).catch(function (err) {
+      formError(form, err.message || 'The source PDF could not be read.');
+      if (submit) submit.disabled = false;
+      return false;
     });
   }
 
