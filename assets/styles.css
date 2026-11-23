@@ -270,6 +270,8 @@ svg{display:block}
 .dot.drafting{background:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.14)}
 .dot.with_officer{background:var(--amber-bright);box-shadow:0 0 0 3px rgba(240,180,41,.20)}
 .dot.draft_eoffice{background:#0891b2;box-shadow:0 0 0 3px rgba(8,145,178,.16)}
+.dot.portal_submitted{background:#d97706;box-shadow:0 0 0 3px rgba(217,119,6,.16)}
+.dot.portal_accepted{background:#16a34a;box-shadow:0 0 0 3px rgba(22,163,74,.16)}
 .dot.signed{background:#7c3aed;box-shadow:0 0 0 3px rgba(124,58,237,.14)}
 .dot.dispatched{background:var(--teal);box-shadow:0 0 0 3px rgba(15,118,110,.14)}
 .col-head h2{font-size:12.5px;font-weight:750;letter-spacing:.01em;color:var(--ink);line-height:1.25}
@@ -305,6 +307,8 @@ svg{display:block}
 .letter-card.tone-drafting{--tone:#2563eb}
 .letter-card.tone-with_officer{--tone:var(--amber-bright)}
 .letter-card.tone-draft_eoffice{--tone:#0891b2}
+.letter-card.tone-portal_submitted{--tone:#d97706}
+.letter-card.tone-portal_accepted{--tone:#16a34a}
 .letter-card.tone-signed{--tone:#7c3aed}
 .letter-card.tone-dispatched{--tone:var(--teal)}
 .card-head{display:flex;align-items:center;gap:8px;justify-content:space-between}
@@ -419,8 +423,11 @@ dialog.modal[open]{display:flex;flex-direction:column;animation:pop .16s ease-ou
 .pill.s-drafting{background:var(--blue-soft);color:#1e40af}
 .pill.s-with_officer{background:var(--amber-soft);color:#8a5208}
 .pill.s-draft_eoffice{background:#cffafe;color:#0e7490}
+.pill.s-portal_submitted{background:#ffedd5;color:#9a3412}
+.pill.s-portal_accepted{background:#dcfce7;color:#166534}
 .pill.s-signed{background:var(--violet-soft);color:#6b21a8}
 .pill.s-dispatched{background:var(--teal-soft);color:#0b5f58}
+.workflow-heading{margin:22px 0 10px;font-size:15px;font-weight:750;color:var(--ink)}
 
 .detail-grid{
   display:grid;grid-template-columns:132px minmax(0,1fr);gap:9px 16px;
@@ -743,6 +750,8 @@ html[data-theme="dark"] .pill.s-received{color:#d2deea}
 html[data-theme="dark"] .pill.s-drafting{color:#a9c5ff}
 html[data-theme="dark"] .pill.s-with_officer{color:#ffd27b}
 html[data-theme="dark"] .pill.s-draft_eoffice{background:#164e63;color:#cffafe;border-color:#155e75}
+html[data-theme="dark"] .pill.s-portal_submitted{background:#512d11;color:#fed7aa;border-color:#713f12}
+html[data-theme="dark"] .pill.s-portal_accepted{background:#123d25;color:#bbf7d0;border-color:#166534}
 html[data-theme="dark"] .pill.s-signed{color:#d1b3f2}
 html[data-theme="dark"] .pill.s-dispatched{color:#9be2d5}
 html[data-theme="dark"] .data-table tbody td{border-color:var(--line)}

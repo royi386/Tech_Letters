@@ -3,6 +3,10 @@
 A four-page portal for tracking letters that come to the Technical Section from the tech
 sections, through drafting and signature, until they are dispatched.
 
+**Tech 8 - Warranty** letters use a separate workflow: received, draft preparation, portal upload,
+portal accepted or rejected (rejections return to draft preparation), then dispatch with a required
+portal-page screenshot.
+
 - **`index.html` — status board.** Read-only view of where every letter is right now.
 - **`admin.html` — admin console.** The register: enter letters, move them, dispatch them.
 - **`management.html` — Management.** Maintains the list of sections and administrator-managed user accounts.
@@ -88,6 +92,8 @@ stay in the register, and the board filters still offer every section that appea
 
 ## How a letter moves
 
+The standard workflow below applies to all sections except **Tech 8 - Warranty**.
+
 | Stage | Shown on the board as | Next action in the console |
 | --- | --- | --- |
 | Received from a section | Received from sections | **Start draft preparation** |
@@ -116,6 +122,15 @@ Administrators can use **Edit details** to adjust the received date and time, cu
 timer, and individual movement timestamps. Signature and dispatch event edits also update
 their corresponding register dates.
 
+### Tech 8 - Warranty
+
+1. Receive the letter from the section and start draft preparation.
+2. Record the upload to the portal.
+3. Record the portal decision. A rejection is logged and returns the letter to draft preparation;
+   acceptance moves it to **Portal accepted**.
+4. Dispatch the accepted letter with a required PNG or JPG screenshot of the portal page. The
+   screenshot is retained with the letter and shown in its details.
+
 ## Settings and backup
 
 Settings covers the shed and section names, the "Recorded by" name, the letter reference prefix,
@@ -124,14 +139,16 @@ pending letter is marked delayed, and a backup panel.
 
 ## Where the data lives — read this before real use
 
-Records, settings, account hashes, sessions, and uploaded source letters are stored in `data/portal.sqlite`. The generated
+Records, settings, account hashes, sessions, and uploaded letter files are stored in `data/portal.sqlite`. The generated
 `data/app.key` encrypts usernames and keys their HMAC lookup values; keep it private and back it up
 with the database. If the key is lost, encrypted usernames cannot be recovered. The server must be
 running for sign-in and database-backed changes.
 
-Use **Settings → Download backup** regularly. **Restore backup** replaces database letters and
-settings with the file's contents; sign-in credentials are not included. The register can also be
-exported as CSV.
+Use **Settings → Download backup** regularly. It downloads a ZIP containing all letter records,
+settings, source documents, Word documents, signed PDFs, and Tech 8 portal screenshots.
+**Restore backup** accepts that ZIP and replaces the current letters and settings, including their
+attachments; sign-in credentials are not included. Older JSON backups can restore records only and
+do not include attachment files. The register can also be exported as CSV.
 
 ## Files
 

@@ -79,9 +79,11 @@
     with_officer: { label: 'With officer', tone: 'with_officer' },
     draft_eoffice: { label: 'Draft sent in e-office', tone: 'draft_eoffice' },
     signed: { label: 'Signed', tone: 'signed' },
+    portal_submitted: { label: 'Uploaded to portal', tone: 'portal_submitted' },
+    portal_accepted: { label: 'Portal accepted', tone: 'portal_accepted' },
     dispatched: { label: 'Dispatched', tone: 'dispatched' }
   };
-  var STATUS_ORDER = ['received', 'drafting', 'with_officer', 'draft_eoffice', 'signed', 'dispatched'];
+  var STATUS_ORDER = ['received', 'drafting', 'portal_submitted', 'portal_accepted', 'with_officer', 'draft_eoffice', 'signed', 'dispatched'];
 
   var BOARD = [
     { key: 'received', title: 'Received from sections', hint: 'New letters awaiting a draft' },
@@ -90,6 +92,13 @@
     { key: 'draft_eoffice', title: 'Draft sent in e-office', hint: 'Awaiting officer signature' },
     { key: 'signed', title: 'Signed — to dispatch', hint: 'Awaiting dispatch' },
     { key: 'dispatched', title: 'Dispatched · last 48 hrs', hint: 'Leaves this board 2 days after dispatch' }
+  ];
+  var WARRANTY_BOARD = [
+    { key: 'received', title: 'Received from section', hint: 'Awaiting draft preparation' },
+    { key: 'drafting', title: 'Prepare draft', hint: 'Drafting or revision after portal rejection' },
+    { key: 'portal_submitted', title: 'Uploaded to portal', hint: 'Awaiting the portal decision' },
+    { key: 'portal_accepted', title: 'Portal accepted', hint: 'Awaiting dispatch' },
+    { key: 'dispatched', title: 'Dispatched · last 48 hrs', hint: 'Portal screenshot retained with the letter' }
   ];
 
   var PRIORITIES = ['Routine', 'Urgent', 'Immediate'];
@@ -100,6 +109,8 @@
     with_officer: '#f0b429',
     draft_eoffice: '#0891b2',
     signed: '#7c3aed',
+    portal_submitted: '#d97706',
+    portal_accepted: '#16a34a',
     dispatched: '#0f766e'
   };
 
@@ -287,6 +298,7 @@
       letters: value.letters.map(function (letter) {
         var copy = cloneValue(letter);
         delete copy.signedPdfName;
+        delete copy.portalScreenshotName;
         return copy;
       })
     };
@@ -451,6 +463,7 @@
         type: String(raw.wordDocument.type || '')
       } : null,
       signedPdfName: String(raw.signedPdfName || '').trim(),
+      portalScreenshotName: String(raw.portalScreenshotName || '').trim(),
       history: letters,
       createdAt: isoOrNull(raw.createdAt) || nowISO(),
       updatedAt: isoOrNull(raw.updatedAt) || nowISO()
@@ -595,6 +608,10 @@
         return letter.officer || 'Officer';
       case 'draft_eoffice':
         return 'Draft sent in e-office · ' + (letter.officer || 'Officer');
+      case 'portal_submitted':
+        return 'Awaiting portal decision';
+      case 'portal_accepted':
+        return 'Portal accepted · awaiting dispatch';
       case 'signed':
         return state.settings.unit + ' — dispatch';
       case 'dispatched':
@@ -794,8 +811,8 @@
     var open = visible.filter(function (l) { return l.status !== 'dispatched'; });
     var withSection = open.filter(function (l) { return l.status === 'received' || l.status === 'drafting'; });
     var withOfficer = open.filter(function (l) { return l.status === 'with_officer'; });
-    var eoffice = open.filter(function (l) { return l.status === 'draft_eoffice'; });
-    var toDispatch = open.filter(function (l) { return l.status === 'signed'; });
+    var awaitingDecision = open.filter(function (l) { return l.status === 'draft_eoffice' || l.status === 'portal_submitted'; });
+    var toDispatch = open.filter(function (l) { return l.status === 'signed' || l.status === 'portal_accepted'; });
     var dispatched = visible.filter(function (l) { return l.status === 'dispatched'; });
 
     var officerHint = state.settings.officers.map(function (o) {
@@ -807,8 +824,8 @@
       { label: 'Open letters', value: open.length, hint: 'currently moving', tone: 'slate' },
       { label: 'With ' + state.settings.unit, value: withSection.length, hint: 'received or being drafted', tone: 'blue' },
       { label: 'With officers', value: withOfficer.length, hintHtml: officerHint || '<span>Awaiting signature</span>', tone: 'amber' },
-      { label: 'Draft sent in e-office', value: eoffice.length, hint: 'awaiting officer signature', tone: 'cyan' },
-      { label: 'Awaiting dispatch', value: toDispatch.length, hint: 'signed and ready to send', tone: 'violet' },
+      { label: 'Awaiting response', value: awaitingDecision.length, hint: 'e-office or portal decision', tone: 'cyan' },
+      { label: 'Awaiting dispatch', value: toDispatch.length, hint: 'signed or portal accepted', tone: 'violet' },
       { label: 'Dispatched', value: dispatched.length, hint: 'leaves the board after 2 days', tone: 'teal' }
     ];
 
@@ -926,27 +943,34 @@
       return;
     }
 
-    var groups = {};
-    BOARD.forEach(function (b) { groups[b.key] = []; });
-    filtered.forEach(function (l) {
-      (groups[l.status] || groups.received).push(l);
-    });
-    BOARD.forEach(function (b) { groups[b.key].sort(cardSort); });
+    function boardHtml(columns, letters) {
+      var groups = {};
+      columns.forEach(function (column) { groups[column.key] = []; });
+      letters.forEach(function (letter) {
+        (groups[letter.status] || groups.received).push(letter);
+      });
+      columns.forEach(function (column) { groups[column.key].sort(cardSort); });
+      return '<div class="board">' + columns.map(function (col) {
+        var cards = groups[col.key];
+        return '<section class="col" data-col="' + col.key + '">' +
+          '<header class="col-head">' +
+          '<span class="dot ' + col.key + '" aria-hidden="true"></span>' +
+          '<h2>' + esc(col.title) + '</h2>' +
+          '<span class="count">' + cards.length + '</span>' +
+          '</header>' +
+          '<p class="col-hint">' + esc(col.hint) + '</p>' +
+          '<div class="cards">' +
+          (cards.length ? cards.map(cardHtml).join('') : '<p class="none">No letters</p>') +
+          '</div>' +
+          '</section>';
+      }).join('') + '</div>';
+    }
 
-    region.innerHTML = '<div class="board">' + BOARD.map(function (col) {
-      var cards = groups[col.key];
-      return '<section class="col" data-col="' + col.key + '">' +
-        '<header class="col-head">' +
-        '<span class="dot ' + col.key + '" aria-hidden="true"></span>' +
-        '<h2>' + esc(col.title) + '</h2>' +
-        '<span class="count">' + cards.length + '</span>' +
-        '</header>' +
-        '<p class="col-hint">' + esc(col.hint) + '</p>' +
-        '<div class="cards">' +
-        (cards.length ? cards.map(cardHtml).join('') : '<p class="none">No letters</p>') +
-        '</div>' +
-        '</section>';
-    }).join('') + '</div>';
+    var standardLetters = filtered.filter(function (letter) { return !isWarrantyLetter(letter); });
+    var warrantyLetters = filtered.filter(isWarrantyLetter);
+    region.innerHTML = (standardLetters.length || !warrantyLetters.length ? boardHtml(BOARD, standardLetters) : '') +
+      (warrantyLetters.length ? '<h2 class="workflow-heading">Tech 8 - Warranty workflow</h2>' +
+        boardHtml(WARRANTY_BOARD, warrantyLetters) : '');
   }
 
   function refreshView() {
@@ -993,7 +1017,8 @@
     ];
     return '<dl class="detail-grid">' + rows.map(function (row) {
       return '<dt>' + esc(row[0]) + '</dt><dd>' + esc(row[1]) + '</dd>';
-    }).join('') + '</dl>' + attachmentLinkHtml(letter) + wordDocumentLinkHtml(letter) + signedPdfLinkHtml(letter);
+    }).join('') + '</dl>' + attachmentLinkHtml(letter) + wordDocumentLinkHtml(letter) +
+      signedPdfLinkHtml(letter) + portalScreenshotLinkHtml(letter);
   }
 
   function attachmentLinkHtml(letter) {
@@ -1032,6 +1057,13 @@
     }
     return '<section class="topic"><h3>Final signed PDF</h3><a class="btn btn-primary" href="/api/letters/' +
       encodeURIComponent(letter.id) + '/signed-pdf">Download ' + esc(letter.signedPdfName) + '</a></section>';
+  }
+
+  function portalScreenshotLinkHtml(letter) {
+    if (!letter.portalScreenshotName || !canDownloadLetterFiles()) return '';
+    if (currentUser && currentUser.role === 'section_user' && letter.fromSection !== currentUser.sectionName) return '';
+    return '<section class="topic"><h3>Portal dispatch screenshot</h3><a class="linkish" target="_blank" rel="noopener" href="/api/letters/' +
+      encodeURIComponent(letter.id) + '/portal-screenshot">View ' + esc(letter.portalScreenshotName) + '</a></section>';
   }
 
   function downloadSignedPdf(id) {
@@ -1137,29 +1169,40 @@
     if (!l) return;
 
     var steps = [];
-    if (l.status === 'received') steps.push(btnAction('start-draft', id, 'Start draft preparation', 'btn-primary'));
-    if (l.status === 'drafting') steps.push(btnAction('submit-officer', id, 'Submit to officer', 'btn-primary'));
-    if (l.status === 'with_officer') {
-      steps.push(btnAction('send-draft-eoffice', id, 'Send draft via e-office', 'btn-primary'));
-      steps.push(btnAction('mark-signed', id, 'Record signature', ''));
-      if (isForwardableOfficer(l.officer)) {
-        steps.push(btnAction('forward-sr-dee', id, 'Send to Sr.DEE', ''));
+    if (isWarrantyLetter(l)) {
+      if (l.status === 'received') steps.push(btnAction('start-draft', id, 'Prepare draft', 'btn-primary'));
+      if (l.status === 'drafting') steps.push(btnAction('upload-warranty-portal', id, 'Upload to portal', 'btn-primary'));
+      if (l.status === 'portal_submitted') {
+        steps.push(btnAction('reject-warranty-portal', id, 'Mark rejected by portal', ''));
+        steps.push(btnAction('accept-warranty-portal', id, 'Mark portal accepted', 'btn-primary'));
       }
-      steps.push(btnAction('return-draft', id, 'Return for revision', ''));
-    }
-    if (l.status === 'draft_eoffice') {
-      steps.push(btnAction('mark-signed', id, 'Record signature', 'btn-primary'));
-      steps.push(btnAction('return-officer', id, 'Return to With officer', ''));
-      if (isForwardableOfficer(l.officer)) {
-        steps.push(btnAction('forward-sr-dee', id, 'Send to Sr.DEE', ''));
+      if (l.status === 'portal_accepted') steps.push(btnAction('dispatch-warranty-portal', id, 'Dispatch with portal screenshot', 'btn-primary'));
+      if (l.status === 'dispatched') steps.push(btnAction('reopen-letter', id, 'Reopen (undo dispatch)', ''));
+    } else {
+      if (l.status === 'received') steps.push(btnAction('start-draft', id, 'Start draft preparation', 'btn-primary'));
+      if (l.status === 'drafting') steps.push(btnAction('submit-officer', id, 'Submit to officer', 'btn-primary'));
+      if (l.status === 'with_officer') {
+        steps.push(btnAction('send-draft-eoffice', id, 'Send draft via e-office', 'btn-primary'));
+        steps.push(btnAction('mark-signed', id, 'Record signature', ''));
+        if (isForwardableOfficer(l.officer)) {
+          steps.push(btnAction('forward-sr-dee', id, 'Send to Sr.DEE', ''));
+        }
+        steps.push(btnAction('return-draft', id, 'Return for revision', ''));
       }
-      steps.push(btnAction('return-draft', id, 'Return for revision', ''));
+      if (l.status === 'draft_eoffice') {
+        steps.push(btnAction('mark-signed', id, 'Record signature', 'btn-primary'));
+        steps.push(btnAction('return-officer', id, 'Return to With officer', ''));
+        if (isForwardableOfficer(l.officer)) {
+          steps.push(btnAction('forward-sr-dee', id, 'Send to Sr.DEE', ''));
+        }
+        steps.push(btnAction('return-draft', id, 'Return for revision', ''));
+      }
+      if (l.status === 'signed') {
+        steps.push(btnAction('mark-dispatched', id, 'Record dispatch', 'btn-primary'));
+        steps.push(btnAction('revert-signature', id, 'Return to With officer', ''));
+      }
+      if (l.status === 'dispatched') steps.push(btnAction('reopen-letter', id, 'Reopen (undo dispatch)', ''));
     }
-    if (l.status === 'signed') {
-      steps.push(btnAction('mark-dispatched', id, 'Record dispatch', 'btn-primary'));
-      steps.push(btnAction('revert-signature', id, 'Return to With officer', ''));
-    }
-    if (l.status === 'dispatched') steps.push(btnAction('reopen-letter', id, 'Reopen (undo dispatch)', ''));
 
     openModal('<div class="modal-head">' +
       '<div><p class="modal-eyebrow">Letter ' + esc(l.refNo) + '</p><h2>' + esc(l.subject) + '</h2></div>' +
@@ -1480,6 +1523,10 @@
         var savedLetter = byId(extra.signedPdf.letterId);
         if (savedLetter) savedLetter.signedPdfName = extra.signedPdf.name;
       }
+      if (extra && extra.portalScreenshot) {
+        var screenshotLetter = byId(extra.portalScreenshot.letterId);
+        if (screenshotLetter) screenshotLetter.portalScreenshotName = extra.portalScreenshot.name;
+      }
       closeModal();
       syncShell();
       refreshCurrentPage();
@@ -1750,6 +1797,134 @@
       });
   }
 
+  function isWarrantyLetter(letter) {
+    return !!letter && letter.fromSection === 'Tech 8 - Warranty';
+  }
+
+  function openWarrantyPortalUpload(id) {
+    if (!isAuthorized('admin')) return;
+    var letter = byId(id);
+    if (!isWarrantyLetter(letter) || letter.status !== 'drafting') {
+      toast('This Tech 8 - Warranty letter is not ready to upload.');
+      return;
+    }
+    openModal('<form class="modal-form">' +
+      '<div class="modal-head"><div><p class="modal-eyebrow">' + esc(letter.refNo) + '</p><h2>Upload the draft to the portal</h2></div>' +
+      '<button class="icon-btn" type="button" data-action="close-modal" aria-label="Close">' + iconClose() + '</button></div>' +
+      '<div class="modal-body"><label class="field"><span>Portal reference or note (optional)</span><textarea name="note" rows="2"></textarea></label>' +
+      '<p class="form-note">After recording the upload, mark the portal decision as accepted or rejected.</p>' +
+      '<p class="form-error" data-form-error hidden></p></div>' +
+      '<div class="modal-foot"><button class="btn" type="button" data-action="close-modal">Cancel</button>' +
+      '<button class="btn btn-primary" type="submit">Record portal upload</button></div></form>', function (fd, form) {
+        var current = byId(id);
+        if (!isWarrantyLetter(current) || current.status !== 'drafting') {
+          formError(form, 'This letter changed while the form was open. Reopen it and try again.');
+          return;
+        }
+        var previous = cloneValue(current);
+        current.status = 'portal_submitted';
+        current.stageSince = nowISO();
+        current.updatedAt = nowISO();
+        logEvent(current, 'Uploaded to portal', { note: String(fd.get('note') || '').trim() });
+        return finish('Portal upload recorded').then(function (saved) {
+          if (!saved) Object.assign(current, previous);
+          return saved;
+        });
+      });
+  }
+
+  function updateWarrantyPortalDecision(id, accepted) {
+    if (!isAuthorized('admin')) return;
+    var letter = byId(id);
+    if (!isWarrantyLetter(letter) || letter.status !== 'portal_submitted') {
+      toast('This Tech 8 - Warranty letter is not awaiting a portal decision.');
+      return;
+    }
+    var label = accepted ? 'Mark portal accepted' : 'Mark rejected by portal';
+    openModal('<form class="modal-form">' +
+      '<div class="modal-head"><div><p class="modal-eyebrow">' + esc(letter.refNo) + '</p><h2>' + label + '</h2></div>' +
+      '<button class="icon-btn" type="button" data-action="close-modal" aria-label="Close">' + iconClose() + '</button></div>' +
+      '<div class="modal-body"><label class="field"><span>' + (accepted ? 'Portal reference or note' : 'Rejection reason') + ' (optional)</span>' +
+      '<textarea name="note" rows="2"></textarea></label><p class="form-error" data-form-error hidden></p></div>' +
+      '<div class="modal-foot"><button class="btn" type="button" data-action="close-modal">Cancel</button>' +
+      '<button class="btn btn-primary" type="submit">' + label + '</button></div></form>', function (fd, form) {
+        var current = byId(id);
+        if (!isWarrantyLetter(current) || current.status !== 'portal_submitted') {
+          formError(form, 'This letter changed while the form was open. Reopen it and try again.');
+          return;
+        }
+        var previous = cloneValue(current);
+        var note = String(fd.get('note') || '').trim();
+        current.status = accepted ? 'portal_accepted' : 'drafting';
+        current.stageSince = nowISO();
+        current.updatedAt = nowISO();
+        logEvent(current, accepted ? 'Portal accepted' : 'Rejected by portal — returned to draft preparation', { note: note });
+        return finish(accepted ? 'Portal acceptance recorded' : 'Portal rejection recorded — returned to draft preparation').then(function (saved) {
+          if (!saved) Object.assign(current, previous);
+          return saved;
+        });
+      });
+  }
+
+  function openWarrantyPortalDispatch(id) {
+    if (!isAuthorized('admin')) return;
+    var letter = byId(id);
+    if (!isWarrantyLetter(letter) || letter.status !== 'portal_accepted') {
+      toast('The Tech 8 - Warranty letter must be accepted by the portal before dispatch.');
+      return;
+    }
+    openModal('<form class="modal-form">' +
+      '<div class="modal-head"><div><p class="modal-eyebrow">' + esc(letter.refNo) + '</p><h2>Dispatch the portal-accepted letter</h2></div>' +
+      '<button class="icon-btn" type="button" data-action="close-modal" aria-label="Close">' + iconClose() + '</button></div>' +
+      '<div class="modal-body"><div class="form-grid">' +
+      '<label class="field"><span>Dispatched on</span><input type="datetime-local" name="dispatchedAt" value="' + esc(localDateTimeValue(Date.now())) + '" required></label>' +
+      '<label class="field"><span>Dispatch reference (optional)</span><input name="dispatchRef"></label>' +
+      '<label class="field span-2"><span>Portal page screenshot (PNG or JPG, up to 8 MB)</span>' +
+      '<input type="file" name="portalScreenshot" accept=".png,.jpg,.jpeg,image/png,image/jpeg" required></label>' +
+      '<label class="field span-2"><span>Note (optional)</span><textarea name="note" rows="2"></textarea></label>' +
+      '</div><p class="form-note">The screenshot is required and will be retained with the letter and its backup.</p>' +
+      '<p class="form-error" data-form-error hidden></p></div>' +
+      '<div class="modal-foot"><button class="btn" type="button" data-action="close-modal">Cancel</button>' +
+      '<button class="btn btn-primary" type="submit">Record dispatch</button></div></form>', function (fd, form) {
+        var current = byId(id);
+        var dispatchedMs = fromDateTimeInput(String(fd.get('dispatchedAt') || ''));
+        var fileInput = form.querySelector('input[name="portalScreenshot"]');
+        var file = fileInput && fileInput.files && fileInput.files[0];
+        if (!current || !isWarrantyLetter(current) || current.status !== 'portal_accepted') {
+          formError(form, 'This letter changed while the dispatch form was open. Reopen it and try again.');
+          return;
+        }
+        if (dispatchedMs == null) { formError(form, 'Enter the date and time of dispatch.'); return; }
+        if (!file) { formError(form, 'Choose the portal page screenshot before dispatching.'); return; }
+        if (!/\.(png|jpe?g)$/i.test(file.name) || (file.type !== 'image/png' && file.type !== 'image/jpeg')) {
+          formError(form, 'Choose a PNG or JPG screenshot.');
+          return;
+        }
+        if (file.size > 8 * 1024 * 1024) { formError(form, 'The screenshot must be no larger than 8 MB.'); return; }
+
+        var reader = new FileReader();
+        reader.onload = function () {
+          var previous = cloneValue(current);
+          current.dispatchMode = 'Portal';
+          current.dispatchRef = String(fd.get('dispatchRef') || '').trim();
+          current.dispatchedAt = new Date(dispatchedMs).toISOString();
+          current.stageSince = current.dispatchedAt;
+          current.status = 'dispatched';
+          current.updatedAt = nowISO();
+          logEvent(current, 'Dispatched via Portal', {
+            note: [String(fd.get('note') || '').trim(), 'Portal screenshot attached: ' + file.name].filter(Boolean).join(' · ')
+          });
+          finish('Tech 8 - Warranty letter dispatched', {
+            portalScreenshot: { letterId: current.id, name: file.name, type: file.type, data: reader.result }
+          }).then(function (saved) {
+            if (!saved) Object.assign(current, previous);
+          });
+        };
+        reader.onerror = function () { formError(form, 'The portal screenshot could not be read.'); };
+        reader.readAsDataURL(file);
+      });
+  }
+
   function openReturn(id) {
     if (!isAuthorized('admin')) return;
     var l = byId(id);
@@ -1849,6 +2024,18 @@
     if (!isAuthorized('admin')) return;
     var l = byId(id);
     if (!l) return;
+    if (isWarrantyLetter(l)) {
+      if (!window.confirm('Reopen this dispatch entry? The letter will return to Portal accepted and stay on the board.')) return;
+      l.status = 'portal_accepted';
+      l.dispatchedAt = null;
+      l.dispatchMode = '';
+      l.dispatchRef = '';
+      l.stageSince = nowISO();
+      l.updatedAt = nowISO();
+      logEvent(l, 'Dispatch entry reopened — portal accepted');
+      finish('Dispatch entry reopened');
+      return;
+    }
     if (!window.confirm('Reopen this dispatch entry? The letter will return to “Signed — to dispatch” and stay on the board.')) return;
     l.status = 'signed';
     l.dispatchedAt = null;
@@ -2793,8 +2980,8 @@
       btnAction('sample-data', '', 'Load sample letters', '') +
       btnAction('erase-data', '', 'Erase all letters', 'btn-danger') +
       '</div>' +
-      '<p class="form-note">A backup is a single JSON file, restored over the letters held in this browser. Keep a copy before changing computers.</p>' +
-      '<input type="file" id="import-file" accept="application/json,.json" hidden>' +
+      '<p class="form-note">The ZIP backup includes all letter records and attached files. Restore replaces the current register and settings.</p>' +
+      '<input type="file" id="import-file" accept="application/zip,.zip,application/json,.json" hidden>' +
       '</div>' +
       '<div class="modal-foot">' +
       '<button class="btn" type="button" data-action="close-modal">Cancel</button>' +
@@ -2863,15 +3050,12 @@
   }
 
   function exportJson() {
-    var payload = {
-      app: 'elx-letter-monitor',
-      version: 1,
-      exportedAt: nowISO(),
-      settings: state.settings,
-      letters: state.letters
-    };
-    download('letter-register-' + stamp() + '.json', JSON.stringify(payload, null, 2), 'application/json');
-    toast('Backup downloaded');
+    var link = document.createElement('a');
+    link.href = '/api/backup';
+    link.download = '';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
   }
 
   function csvCell(value) {
@@ -2897,6 +3081,10 @@
   }
 
   function handleImport(file) {
+    if (/\.zip$/i.test(file.name)) {
+      handleZipImport(file);
+      return;
+    }
     var reader = new FileReader();
     reader.onload = function () {
       var data;
@@ -2925,14 +3113,38 @@
         next.letters.length + ' letter(s) from this backup?\n\nThe current records will be overwritten.');
       if (!ok) return;
       state = next;
-      persist();
-      syncShell();
-      closeModal();
-      refreshAdmin();
-      toast('Backup restored — ' + state.letters.length + ' letters loaded');
+      persist().then(function () {
+        syncShell();
+        closeModal();
+        refreshAdmin();
+        toast('Legacy JSON restored — attachment files are not included');
+      }).catch(function (err) {
+        toast(err.message || 'The backup could not be saved.');
+      });
     };
     reader.onerror = function () { toast('The file could not be read.'); };
     reader.readAsText(file);
+  }
+
+  function handleZipImport(file) {
+    if (!window.confirm('Replace the current letters and settings with this ZIP backup?\n\nThe current records will be overwritten.')) return;
+    fetch('/api/backup', {
+      method: 'PUT',
+      credentials: 'same-origin',
+      headers: { 'content-type': 'application/zip' },
+      body: file
+    }).then(function (response) {
+      return response.json().catch(function () { return {}; }).then(function (body) {
+        if (!response.ok) throw new Error(body.error || 'The ZIP backup could not be restored.');
+        return apiRequest('/api/state');
+      });
+    }).then(function (data) {
+      applyServerState(data);
+      closeModal();
+      toast('ZIP backup restored — ' + data.letters.length + ' letters and their files loaded');
+    }).catch(function (err) {
+      toast(err.message || 'The ZIP backup could not be restored.');
+    });
   }
 
   function addSamples() {
@@ -3091,6 +3303,18 @@
         break;
       case 'start-draft':
         startDraft(id);
+        break;
+      case 'upload-warranty-portal':
+        openWarrantyPortalUpload(id);
+        break;
+      case 'reject-warranty-portal':
+        updateWarrantyPortalDecision(id, false);
+        break;
+      case 'accept-warranty-portal':
+        updateWarrantyPortalDecision(id, true);
+        break;
+      case 'dispatch-warranty-portal':
+        openWarrantyPortalDispatch(id);
         break;
       case 'submit-officer':
         openSubmit(id);

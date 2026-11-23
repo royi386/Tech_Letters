@@ -4,6 +4,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const zlib = require('zlib');
 const { DatabaseSync } = require('node:sqlite');
 
 const root = __dirname;
@@ -76,6 +77,13 @@ db.exec(`
     data BLOB NOT NULL,
     created_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS portal_screenshot_attachments (
+    letter_id TEXT PRIMARY KEY,
+    filename TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    data BLOB NOT NULL,
+    created_at TEXT NOT NULL
+  );
   INSERT OR IGNORE INTO portal_state (id, settings_json, letters_json, initialized)
     VALUES (1, '{}', '[]', 0);
 `);
@@ -142,6 +150,176 @@ function sendJson(res, status, value, headers) {
     'x-content-type-options': 'nosniff'
   }, headers || {}));
   res.end(JSON.stringify(value));
+}
+
+const MAX_BACKUP_BYTES = 256 * 1024 * 1024;
+const MAX_BACKUP_ENTRIES = 60000;
+const CRC32_TABLE = Array.from({ length: 256 }, (_, value) => {
+  let crc = value;
+  for (let bit = 0; bit < 8; bit++) crc = (crc & 1) ? (0xedb88320 ^ (crc >>> 1)) : (crc >>> 1);
+  return crc >>> 0;
+});
+
+function crc32(data) {
+  let crc = 0xffffffff;
+  for (const byte of data) crc = CRC32_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function createZip(files) {
+  const localParts = [];
+  const centralParts = [];
+  let offset = 0;
+  let archiveSize = 22;
+  for (const file of files) {
+    const name = Buffer.from(file.name, 'utf8');
+    const data = Buffer.from(file.data);
+    if (!name.length || name.length > 0xffff || data.length > 0xffffffff) {
+      throw new Error('A backup file exceeds the ZIP format limits.');
+    }
+    archiveSize += 76 + name.length * 2 + data.length;
+    if (archiveSize > MAX_BACKUP_BYTES) throw new Error('The backup exceeds the 256 MB limit.');
+    const checksum = crc32(data);
+    const local = Buffer.alloc(30 + name.length);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(0x0800, 6);
+    local.writeUInt16LE(0, 8);
+    local.writeUInt16LE(0, 10);
+    local.writeUInt16LE(0x21, 12);
+    local.writeUInt32LE(checksum, 14);
+    local.writeUInt32LE(data.length, 18);
+    local.writeUInt32LE(data.length, 22);
+    local.writeUInt16LE(name.length, 26);
+    local.writeUInt16LE(0, 28);
+    name.copy(local, 30);
+    localParts.push(local, data);
+
+    const central = Buffer.alloc(46 + name.length);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(20, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(0x0800, 8);
+    central.writeUInt16LE(0, 10);
+    central.writeUInt16LE(0, 12);
+    central.writeUInt16LE(0x21, 14);
+    central.writeUInt32LE(checksum, 16);
+    central.writeUInt32LE(data.length, 20);
+    central.writeUInt32LE(data.length, 24);
+    central.writeUInt16LE(name.length, 28);
+    central.writeUInt16LE(0, 30);
+    central.writeUInt16LE(0, 32);
+    central.writeUInt16LE(0, 34);
+    central.writeUInt16LE(0, 36);
+    central.writeUInt32LE(0, 38);
+    central.writeUInt32LE(offset, 42);
+    name.copy(central, 46);
+    centralParts.push(central);
+    offset += local.length + data.length;
+  }
+  if (files.length > MAX_BACKUP_ENTRIES) throw new Error('Too many files in the backup.');
+  const centralDirectory = Buffer.concat(centralParts);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(0, 4);
+  end.writeUInt16LE(0, 6);
+  end.writeUInt16LE(files.length, 8);
+  end.writeUInt16LE(files.length, 10);
+  end.writeUInt32LE(centralDirectory.length, 12);
+  end.writeUInt32LE(offset, 16);
+  end.writeUInt16LE(0, 20);
+  return Buffer.concat(localParts.concat(centralDirectory, end));
+}
+
+function readZip(data) {
+  if (data.length < 22 || data.length > MAX_BACKUP_BYTES) {
+    throw Object.assign(new Error('The ZIP backup is empty or exceeds the 256 MB limit.'), { status: 400 });
+  }
+  const minimum = Math.max(0, data.length - 22 - 0xffff);
+  let endOffset = -1;
+  for (let offset = data.length - 22; offset >= minimum; offset--) {
+    if (data.readUInt32LE(offset) === 0x06054b50) { endOffset = offset; break; }
+  }
+  if (endOffset < 0) throw Object.assign(new Error('The selected file is not a valid ZIP backup.'), { status: 400 });
+  const disk = data.readUInt16LE(endOffset + 4);
+  const centralDisk = data.readUInt16LE(endOffset + 6);
+  const diskEntries = data.readUInt16LE(endOffset + 8);
+  const entryCount = data.readUInt16LE(endOffset + 10);
+  const centralSize = data.readUInt32LE(endOffset + 12);
+  const centralOffset = data.readUInt32LE(endOffset + 16);
+  if (disk || centralDisk || diskEntries !== entryCount || entryCount > MAX_BACKUP_ENTRIES ||
+      centralOffset + centralSize > endOffset) {
+    throw Object.assign(new Error('The ZIP backup has an unsupported structure.'), { status: 400 });
+  }
+  const files = new Map();
+  let offset = centralOffset;
+  let totalSize = 0;
+  for (let index = 0; index < entryCount; index++) {
+    if (offset + 46 > data.length || data.readUInt32LE(offset) !== 0x02014b50) {
+      throw Object.assign(new Error('The ZIP backup directory is invalid.'), { status: 400 });
+    }
+    const flags = data.readUInt16LE(offset + 8);
+    const method = data.readUInt16LE(offset + 10);
+    const checksum = data.readUInt32LE(offset + 16);
+    const compressedSize = data.readUInt32LE(offset + 20);
+    const uncompressedSize = data.readUInt32LE(offset + 24);
+    const nameLength = data.readUInt16LE(offset + 28);
+    const extraLength = data.readUInt16LE(offset + 30);
+    const commentLength = data.readUInt16LE(offset + 32);
+    const localOffset = data.readUInt32LE(offset + 42);
+    const centralEnd = offset + 46 + nameLength + extraLength + commentLength;
+    if (centralEnd > data.length || (flags & 1) || (method !== 0 && method !== 8) ||
+        compressedSize === 0xffffffff || uncompressedSize === 0xffffffff ||
+        uncompressedSize > MAX_BACKUP_BYTES || totalSize + uncompressedSize > MAX_BACKUP_BYTES) {
+      throw Object.assign(new Error('The ZIP backup contains an unsupported or oversized file.'), { status: 400 });
+    }
+    const nameBytes = data.subarray(offset + 46, offset + 46 + nameLength);
+    const name = nameBytes.toString('utf8');
+    if (!name || !Buffer.from(name, 'utf8').equals(nameBytes) || files.has(name)) {
+      throw Object.assign(new Error('The ZIP backup contains an invalid or duplicate filename.'), { status: 400 });
+    }
+    if (localOffset + 30 > data.length || data.readUInt32LE(localOffset) !== 0x04034b50) {
+      throw Object.assign(new Error('The ZIP backup file data is invalid.'), { status: 400 });
+    }
+    const localNameLength = data.readUInt16LE(localOffset + 26);
+    const localExtraLength = data.readUInt16LE(localOffset + 28);
+    const fileStart = localOffset + 30 + localNameLength + localExtraLength;
+    const fileEnd = fileStart + compressedSize;
+    if (fileEnd > data.length) throw Object.assign(new Error('The ZIP backup file data is truncated.'), { status: 400 });
+    const compressed = data.subarray(fileStart, fileEnd);
+    let contents;
+    try {
+      contents = method === 0 ? Buffer.from(compressed)
+        : zlib.inflateRawSync(compressed, { maxOutputLength: MAX_BACKUP_BYTES });
+    } catch {
+      throw Object.assign(new Error('A file in the ZIP backup could not be decompressed.'), { status: 400 });
+    }
+    if (contents.length !== uncompressedSize || crc32(contents) !== checksum) {
+      throw Object.assign(new Error('A file in the ZIP backup failed its integrity check.'), { status: 400 });
+    }
+    totalSize += contents.length;
+    files.set(name, contents);
+    offset = centralEnd;
+  }
+  return files;
+}
+
+function readBinaryBody(req, maxBytes) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let length = 0;
+    req.on('data', (chunk) => {
+      length += chunk.length;
+      if (length > maxBytes) {
+        reject(Object.assign(new Error('The uploaded backup exceeds the size limit.'), { status: 413 }));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks, length)));
+    req.on('error', reject);
+  });
 }
 
 function readBody(req, maxBytes) {
@@ -319,12 +497,159 @@ function parseSourcePdf(value) {
   return attachment;
 }
 
-function withSignedPdfNames(letters) {
+function parsePortalScreenshot(value) {
+  const attachment = parseAttachment(value);
+  const extension = path.extname(attachment.filename).toLowerCase();
+  const isPng = extension === '.png' && attachment.contentType === 'image/png' &&
+    attachment.data.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  const isJpeg = (extension === '.jpg' || extension === '.jpeg') && attachment.contentType === 'image/jpeg' &&
+    attachment.data[0] === 0xff && attachment.data[1] === 0xd8;
+  if (!isPng && !isJpeg) {
+    throw Object.assign(new Error('Choose a valid PNG or JPG screenshot.'), { status: 400 });
+  }
+  return attachment;
+}
+
+function withAttachmentNames(letters) {
   const files = db.prepare('SELECT letter_id, filename FROM signed_letter_attachments').all();
-  const names = new Map(files.map((file) => [file.letter_id, file.filename]));
+  const signedNames = new Map(files.map((file) => [file.letter_id, file.filename]));
+  const screenshotFiles = db.prepare('SELECT letter_id, filename FROM portal_screenshot_attachments').all();
+  const screenshotNames = new Map(screenshotFiles.map((file) => [file.letter_id, file.filename]));
   return letters.map((letter) => Object.assign({}, letter, {
-    signedPdfName: names.get(String(letter.id)) || ''
+    signedPdfName: signedNames.get(String(letter.id)) || '',
+    portalScreenshotName: screenshotNames.get(String(letter.id)) || ''
   }));
+}
+
+function makeBackup() {
+  const row = db.prepare('SELECT settings_json, letters_json FROM portal_state WHERE id = 1').get();
+  const letters = withAttachmentNames(JSON.parse(row.letters_json));
+  const letterIndexes = new Map(letters.map((letter, index) => [String(letter.id), index]));
+  const files = [{ name: 'backup.json', data: null }];
+  const attachments = [];
+  const tables = [
+    { kind: 'source', table: 'letter_attachments' },
+    { kind: 'word', table: 'word_document_attachments' },
+    { kind: 'signed', table: 'signed_letter_attachments' },
+    { kind: 'screenshot', table: 'portal_screenshot_attachments' }
+  ];
+  for (const type of tables) {
+    const rows = db.prepare(`SELECT letter_id, filename, content_type, data FROM ${type.table}`).all();
+    for (const file of rows) {
+      const index = letterIndexes.get(String(file.letter_id));
+      if (index == null) continue;
+      const archivePath = `attachments/${index}/${type.kind}`;
+      attachments.push({
+        letterId: String(file.letter_id),
+        kind: type.kind,
+        name: file.filename,
+        type: file.content_type,
+        path: archivePath
+      });
+      files.push({ name: archivePath, data: file.data });
+    }
+  }
+  files[0].data = Buffer.from(JSON.stringify({
+    app: 'elx-letter-monitor',
+    version: 2,
+    exportedAt: new Date().toISOString(),
+    settings: JSON.parse(row.settings_json),
+    letters,
+    attachments
+  }, null, 2));
+  return createZip(files);
+}
+
+function restoreBackup(archive) {
+  const files = readZip(archive);
+  const manifestFile = files.get('backup.json');
+  if (!manifestFile) throw Object.assign(new Error('The ZIP does not contain a portal backup.'), { status: 400 });
+  let manifest;
+  try { manifest = JSON.parse(manifestFile.toString('utf8')); }
+  catch { throw Object.assign(new Error('The backup manifest could not be read.'), { status: 400 }); }
+  if (!manifest || manifest.app !== 'elx-letter-monitor' || !manifest.settings ||
+      typeof manifest.settings !== 'object' || Array.isArray(manifest.settings) ||
+      !Array.isArray(manifest.letters) || !Array.isArray(manifest.attachments)) {
+    throw Object.assign(new Error('The ZIP does not contain a valid portal backup.'), { status: 400 });
+  }
+
+  const indexes = new Map();
+  const letters = manifest.letters.map((letter, index) => {
+    if (!letter || typeof letter !== 'object' || !letter.id || typeof letter.id !== 'string' ||
+        indexes.has(letter.id)) {
+      throw Object.assign(new Error('The backup contains an invalid or duplicate letter.'), { status: 400 });
+    }
+    indexes.set(letter.id, index);
+    return Object.assign({}, letter, {
+      attachment: null,
+      wordDocument: null,
+      signedPdfName: '',
+      portalScreenshotName: ''
+    });
+  });
+  const storedFiles = [];
+  const seen = new Set();
+  const kinds = new Set(['source', 'word', 'signed', 'screenshot']);
+  for (const item of manifest.attachments) {
+    if (!item || !indexes.has(item.letterId) || !kinds.has(item.kind)) {
+      throw Object.assign(new Error('The backup contains an invalid attachment record.'), { status: 400 });
+    }
+    const key = item.letterId + ':' + item.kind;
+    const index = indexes.get(item.letterId);
+    const expectedPath = `attachments/${index}/${item.kind}`;
+    if (seen.has(key) || item.path !== expectedPath) {
+      throw Object.assign(new Error('The backup contains an invalid or duplicate attachment path.'), { status: 400 });
+    }
+    seen.add(key);
+    const data = files.get(expectedPath);
+    if (!data) throw Object.assign(new Error('A file referenced by the backup is missing.'), { status: 400 });
+    const value = { name: item.name, type: item.type, data: data.toString('base64') };
+    const attachment = item.kind === 'source' ? parseSourcePdf(value)
+      : item.kind === 'word' ? parseWordDocument(value)
+        : item.kind === 'signed' ? parseSignedPdf(value) : parsePortalScreenshot(value);
+    const letter = letters[index];
+    if (item.kind === 'source') letter.attachment = { name: attachment.filename, type: attachment.contentType };
+    if (item.kind === 'word') letter.wordDocument = { name: attachment.filename, type: attachment.contentType };
+    if (item.kind === 'signed') letter.signedPdfName = attachment.filename;
+    if (item.kind === 'screenshot') {
+      if (letter.fromSection !== 'Tech 8 - Warranty') {
+        throw Object.assign(new Error('Portal screenshots can only be restored for Tech 8 - Warranty letters.'), { status: 400 });
+      }
+      letter.portalScreenshotName = attachment.filename;
+    }
+    storedFiles.push({ letterId: item.letterId, kind: item.kind, attachment });
+  }
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const current = db.prepare('SELECT revision FROM portal_state WHERE id = 1').get();
+    const activeSections = new Set(manifest.settings.sections || []);
+    const assigned = db.prepare("SELECT DISTINCT section_name FROM accounts WHERE role = 'section_user' AND section_name IS NOT NULL").all();
+    if (assigned.some((row) => !activeSections.has(row.section_name))) {
+      throw Object.assign(new Error('Reassign or remove section users before restoring settings without their section.'), { status: 409 });
+    }
+    const revision = current.revision + 1;
+    db.prepare('UPDATE portal_state SET settings_json = ?, letters_json = ?, initialized = 1, revision = ? WHERE id = 1')
+      .run(JSON.stringify(manifest.settings), JSON.stringify(letters), revision);
+    db.exec(`DELETE FROM letter_attachments;
+      DELETE FROM word_document_attachments;
+      DELETE FROM signed_letter_attachments;
+      DELETE FROM portal_screenshot_attachments;`);
+    const statements = {
+      source: db.prepare('INSERT INTO letter_attachments (letter_id, filename, content_type, data, created_at) VALUES (?, ?, ?, ?, ?)'),
+      word: db.prepare('INSERT INTO word_document_attachments (letter_id, filename, content_type, data, created_at) VALUES (?, ?, ?, ?, ?)'),
+      signed: db.prepare('INSERT INTO signed_letter_attachments (letter_id, filename, content_type, data, created_at) VALUES (?, ?, ?, ?, ?)'),
+      screenshot: db.prepare('INSERT INTO portal_screenshot_attachments (letter_id, filename, content_type, data, created_at) VALUES (?, ?, ?, ?, ?)')
+    };
+    const now = new Date().toISOString();
+    for (const item of storedFiles) {
+      statements[item.kind].run(item.letterId, item.attachment.filename, item.attachment.contentType, item.attachment.data, now);
+    }
+    db.exec('COMMIT');
+    return { revision, count: letters.length };
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
 }
 
 function accountByUsername(username) {
@@ -430,13 +755,34 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { ok: true });
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/backup') {
+    if (!requireAdmin(req, res)) return;
+    const archive = makeBackup();
+    const filename = 'letter-register-' + new Date().toISOString().slice(0, 10) + '.zip';
+    res.writeHead(200, {
+      'content-type': 'application/zip',
+      'content-disposition': `attachment; filename="${filename}"`,
+      'content-length': archive.length,
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff'
+    });
+    return res.end(archive);
+  }
+
+  if (req.method === 'PUT' && url.pathname === '/api/backup') {
+    if (!requireAdmin(req, res)) return;
+    const archive = await readBinaryBody(req, MAX_BACKUP_BYTES);
+    const result = restoreBackup(archive);
+    return sendJson(res, 200, { ok: true, revision: result.revision, count: result.count });
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/state') {
     const row = db.prepare('SELECT settings_json, letters_json, initialized, revision FROM portal_state WHERE id = 1').get();
     const settings = JSON.parse(row.settings_json);
     const letters = JSON.parse(row.letters_json);
     return sendJson(res, 200, {
       settings,
-      letters: withSignedPdfNames(letters),
+      letters: withAttachmentNames(letters),
       initialized: !!row.initialized,
       revision: row.revision
     });
@@ -462,13 +808,35 @@ async function handleApi(req, res, url) {
       if (!sourceLetter) return sendJson(res, 400, { error: 'The source PDF must belong to a letter in the register.' });
       sourcePdf = Object.assign(parseSourcePdf(body.sourcePdf), { letterId: sourceLetterId });
     }
-    const lettersForStorage = body.letters.map(({ signedPdfName, ...letter }) => letter);
+    let portalScreenshot = null;
+    if (body.portalScreenshot) {
+      const screenshotLetterId = String(body.portalScreenshot.letterId || '');
+      const screenshotLetter = body.letters.find((letter) => String(letter.id) === screenshotLetterId);
+      if (!screenshotLetter || screenshotLetter.fromSection !== 'Tech 8 - Warranty' ||
+          screenshotLetter.status !== 'dispatched') {
+        return sendJson(res, 400, { error: 'A portal screenshot must belong to a dispatched Tech 8 - Warranty letter.' });
+      }
+      portalScreenshot = Object.assign(parsePortalScreenshot(body.portalScreenshot), { letterId: screenshotLetterId });
+    }
+    const lettersForStorage = body.letters.map(({ signedPdfName, portalScreenshotName, ...letter }) => letter);
     db.exec('BEGIN IMMEDIATE');
     try {
       const current = db.prepare('SELECT revision FROM portal_state WHERE id = 1').get();
       if (!Number.isInteger(body.revision) || body.revision !== current.revision) {
         db.exec('ROLLBACK');
         return sendJson(res, 409, { error: 'The register changed in another session. Reload the page before saving again.' });
+      }
+      const currentLetters = JSON.parse(db.prepare('SELECT letters_json FROM portal_state WHERE id = 1').get().letters_json);
+      const currentById = new Map(currentLetters.map((letter) => [String(letter.id), letter]));
+      const missingPortalScreenshot = body.letters.some((letter) => {
+        const previous = currentById.get(String(letter.id));
+        return letter.fromSection === 'Tech 8 - Warranty' && letter.status === 'dispatched' &&
+          (!previous || previous.status !== 'dispatched') &&
+          (!portalScreenshot || portalScreenshot.letterId !== String(letter.id));
+      });
+      if (missingPortalScreenshot) {
+        db.exec('ROLLBACK');
+        return sendJson(res, 400, { error: 'Attach a portal screenshot when dispatching a Tech 8 - Warranty letter.' });
       }
       const activeSections = new Set(body.settings.sections || []);
       const assigned = db.prepare("SELECT DISTINCT section_name FROM accounts WHERE role = 'section_user' AND section_name IS NOT NULL").all();
@@ -495,6 +863,11 @@ async function handleApi(req, res, url) {
           db.prepare('DELETE FROM signed_letter_attachments WHERE letter_id = ?').run(attachment.letter_id);
         }
       }
+      for (const attachment of db.prepare('SELECT letter_id FROM portal_screenshot_attachments').all()) {
+        if (!retainedLetterIds.has(attachment.letter_id)) {
+          db.prepare('DELETE FROM portal_screenshot_attachments WHERE letter_id = ?').run(attachment.letter_id);
+        }
+      }
       if (signedPdf) {
         db.prepare(`INSERT INTO signed_letter_attachments (letter_id, filename, content_type, data, created_at)
           VALUES (?, ?, ?, ?, ?)
@@ -508,6 +881,13 @@ async function handleApi(req, res, url) {
           ON CONFLICT(letter_id) DO UPDATE SET filename = excluded.filename, content_type = excluded.content_type,
             data = excluded.data, created_at = excluded.created_at`)
           .run(sourcePdf.letterId, sourcePdf.filename, sourcePdf.contentType, sourcePdf.data, new Date().toISOString());
+      }
+      if (portalScreenshot) {
+        db.prepare(`INSERT INTO portal_screenshot_attachments (letter_id, filename, content_type, data, created_at)
+          VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(letter_id) DO UPDATE SET filename = excluded.filename, content_type = excluded.content_type,
+            data = excluded.data, created_at = excluded.created_at`)
+          .run(portalScreenshot.letterId, portalScreenshot.filename, portalScreenshot.contentType, portalScreenshot.data, new Date().toISOString());
       }
       db.exec('COMMIT');
       return sendJson(res, 200, { ok: true, revision });
@@ -738,6 +1118,28 @@ async function handleApi(req, res, url) {
     res.writeHead(200, {
       'content-type': 'application/pdf',
       'content-disposition': `attachment; filename="signed-letter.pdf"; filename*=UTF-8''${encodedFilename}`,
+      'content-length': row.data.length,
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff'
+    });
+    return res.end(row.data);
+  }
+
+  const portalScreenshotMatch = url.pathname.match(/^\/api\/letters\/([a-z0-9-]+)\/portal-screenshot$/i);
+  if (portalScreenshotMatch && req.method === 'GET') {
+    const user = requireLogin(req, res, false);
+    if (!user) return;
+    const letterId = portalScreenshotMatch[1];
+    if (user.role !== 'admin' && (user.role !== 'section_user' || !sectionCanAccessLetter(letterId, user))) {
+      return sendJson(res, 404, { error: 'Portal screenshot not found.' });
+    }
+    const row = db.prepare('SELECT filename, content_type, data FROM portal_screenshot_attachments WHERE letter_id = ?').get(letterId);
+    if (!row) return sendJson(res, 404, { error: 'Portal screenshot not found.' });
+    const encodedFilename = encodeURIComponent(row.filename.toWellFormed()).replace(/['()*]/g, (char) =>
+      '%' + char.charCodeAt(0).toString(16).toUpperCase());
+    res.writeHead(200, {
+      'content-type': row.content_type,
+      'content-disposition': `inline; filename="portal-screenshot"; filename*=UTF-8''${encodedFilename}`,
       'content-length': row.data.length,
       'cache-control': 'no-store',
       'x-content-type-options': 'nosniff'
