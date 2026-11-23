@@ -497,6 +497,13 @@ function parseSourcePdf(value) {
   return attachment;
 }
 
+function parseBackupSourceAttachment(value) {
+  const extension = path.extname(String(value && value.name || '')).toLowerCase();
+  if (extension === '.pdf') return parseSourcePdf(value);
+  if (extension === '.docx') return parseWordDocument(value);
+  return parseSignedLetter(value);
+}
+
 function parsePortalScreenshot(value) {
   const attachment = parseAttachment(value);
   const extension = path.extname(attachment.filename).toLowerCase();
@@ -604,7 +611,7 @@ function restoreBackup(archive) {
     const data = files.get(expectedPath);
     if (!data) throw Object.assign(new Error('A file referenced by the backup is missing.'), { status: 400 });
     const value = { name: item.name, type: item.type, data: data.toString('base64') };
-    const attachment = item.kind === 'source' ? parseSourcePdf(value)
+    const attachment = item.kind === 'source' ? parseBackupSourceAttachment(value)
       : item.kind === 'word' ? parseWordDocument(value)
         : item.kind === 'signed' ? parseSignedPdf(value) : parsePortalScreenshot(value);
     const letter = letters[index];
